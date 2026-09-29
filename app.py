@@ -7,7 +7,7 @@ from PIL import Image
 from streamlit_image_coordinates import streamlit_image_coordinates
 
 st.set_page_config(
-    page_title="열화상 타일 객관적 적응형 충진율 분석 시스템",
+    page_title="열화상 타일 빛 번짐 보정 자동 충진율 분석 시스템",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -65,25 +65,23 @@ if "coord_key" not in st.session_state:
 
 st.markdown("""
     <div class="title-card">
-        <h1>📊 열화상 타일 객관적 적응형 충진율 분석 시스템</h1>
-        <p>알고리즘 기반 자동 경계 산출 (Otsu & K-Means 알고리즘)</p>
+        <h1>📊 빛 번짐(포화) 보정 열화상 타일 충진율 분석 시스템</h1>
+        <p>Otsu 적응형 이진화 + 흰색 포화 영역(최고온도 지점) 자동 감지 융합</p>
     </div>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 📌 사이드바: 객관적 분석 알고리즘 선택
+# 📌 사이드바 옵션
 # ---------------------------------------------------------
-st.sidebar.header("📁 이미지 및 알고리즘 설정")
+st.sidebar.header("📁 이미지 및 빛 번짐 보정 설정")
 uploaded_file = st.sidebar.file_uploader("열화상 사진 선택", type=["jpg", "jpeg", "png", "bmp"])
 
 st.sidebar.markdown("---")
-st.sidebar.header("🤖 자동 분할 알고리즘 선택")
-algo_option = st.sidebar.radio(
-    "알고리즘 종류",
-    ["Otsu 적응형 이진화 (권장)", "K-Means 머신러닝 군집화", "Adaptive Gaussian Threshold"]
-)
+st.sidebar.header("☀️ 빛 번짐(흰색 영역) 보정 옵션")
+fix_glare = st.sidebar.checkbox("빛 번짐/흰색 포화 영역 자동 포함", value=True)
+white_thresh = st.sidebar.slider("흰색 포화 감지 기준 (RGB 명도)", 200, 255, 235)
 
-st.sidebar.caption("💡 **설명:** 사용자가 가중치나 색상 수치를 지정하지 않고, 이미지 내의 온도 히스토그램을 알고리즘이 스스로 계산하여 분할합니다.")
+st.sidebar.caption("💡 **원리:** 열화상 촬영 시 빛 반사나 최고 온도로 인해 흰색으로 번진 영역을 '가장 뜨거운 충진 영역'으로 판별하여 분석 결과에 100% 반영합니다.")
 
 if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -156,76 +154,64 @@ if uploaded_file is not None:
             warped_img = cv2.warpPerspective(orig_img, matrix, (TARGET_W, TARGET_H))
             warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
             
-            # --- 객관적 자동 분할 알고리즘 연산 ---
+            # --- 1. 대비 선명화 (CLAHE 적용) ---
             gray_img = cv2.cvtColor(warped_img, cv2.COLOR_BGR2GRAY)
-            # 가우시안 블러로 노이즈 제거
-            blurred = cv2.GaussianBlur(gray_img, (5, 5), 0)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            enhanced_gray = clahe.apply(gray_img)
+            blurred = cv2.GaussianBlur(enhanced_gray, (5, 5), 0)
             
-            if algo_option == "Otsu 적응형 이진화 (권장)":
-                # Otsu 알고리즘: 히스토그램 분산 극대화를 통한 자동 임계값(Threshold) 찾기
-                otsu_thresh, binary_mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                auto_info = f"자동 결정된 경계값(Otsu Threshold): {otsu_thresh:.1f}"
-
-            elif algo_option == "K-Means 머신러닝 군집화":
-                # K-Means: 색상/온도 특성을 2개 군집(충진/미충진)으로 머신러닝 자동 분할
-                pixel_values = warped_img.reshape((-1, 3))
-                pixel_values = np.float32(pixel_values)
-                criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
-                k = 2
-                _, labels, centers = cv2.kmeans(pixel_values, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+            # --- 2. Otsu 적응형 이진화 ---
+            otsu_thresh, binary_mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # --- 3. 빛 번짐 / 흰색 포화 영역 보정 (White Glare Mask) ---
+            if fix_glare:
+                # RGB 모든 채널이 설정값 이상으로 매우 높은 영역 (흰색 포화 지점)
+                white_mask = cv2.inRange(warped_rgb, 
+                                         np.array([white_thresh, white_thresh, white_thresh]), 
+                                         np.array([255, 255, 255]))
                 
-                # 더 밝은/온도가 높은 클러스터 인덱스 탐색
-                centers = np.uint8(centers)
-                brightness = np.mean(centers, axis=1)
-                high_temp_cluster = np.argmax(brightness)
-                
-                binary_mask = (labels == high_temp_cluster).astype(np.uint8) * 255
-                binary_mask = binary_mask.reshape((TARGET_H, TARGET_W))
-                auto_info = "K-Means (K=2) 클러스터링으로 고온 영역 자동 분할"
-
+                # Otsu 이진화 마스크와 흰색 포화 마스크를 합성(OR 연산)
+                combined_mask = cv2.bitwise_or(binary_mask, white_mask)
             else:
-                # Gaussian Adaptive Thresholding
-                binary_mask = cv2.adaptiveThreshold(
-                    blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                    cv2.THRESH_BINARY, 11, 2
-                )
-                auto_info = "국소 영역 Gaussian 적응형 이진화 적용"
+                combined_mask = binary_mask
 
-            # 모폴로지 연산으로 자잘한 노이즈 정리
-            kernel = np.ones((3, 3), np.uint8)
-            binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_OPEN, kernel)
+            # --- 4. 노이즈 및 자잘한 구멍 메우기 (Morphological Closing) ---
+            kernel = np.ones((5, 5), np.uint8)
+            # MORPH_CLOSE: 팽창 후 침식을 수행하여 내부의 자잘한 미충진/빛번짐 구멍을 메움
+            final_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
+            final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel)
 
             # 비율 계산
-            filled_pixels = np.sum(binary_mask == 255)
+            filled_pixels = np.sum(final_mask == 255)
             total_pixels = TARGET_W * TARGET_H
             final_ratio = (filled_pixels / total_pixels) * 100.0
 
-            # 마스크 시각화 (2채널 흑백)
-            display_mask_bgr = cv2.cvtColor(binary_mask, cv2.COLOR_GRAY2BGR)
+            # 마스크 시각화
+            display_mask_bgr = cv2.cvtColor(final_mask, cv2.COLOR_GRAY2BGR)
 
             with col2:
                 st.markdown("##### 2. 정면 보정")
                 st.image(warped_rgb, use_container_width=True)
             
             with col3:
-                st.markdown("##### 3. 자동 진단 마스크 (Otsu)")
+                st.markdown("##### 3. 보정 진단 마스크")
                 st.image(display_mask_bgr, use_container_width=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
             
-            st.info(f"🤖 **[자동 연산 정보]:** {auto_info}")
+            st.info(f"🤖 **[자동 연산 정보]:** Otsu 경계값: {otsu_thresh:.1f} | 빛 번짐 보정: {'적용됨' if fix_glare else '미적용'}")
 
             if final_ratio >= 80.0:
-                st.success(f"🎉 **[기준 80% 만족 (합격)]** 자동 산출 충진율: **{final_ratio:.2f}%**")
+                st.success(f"🎉 **[기준 80% 만족 (합격)]** 보정 후 충진율: **{final_ratio:.2f}%**")
             else:
-                st.error(f"🚨 **[기준 80% 미달 (불합격)]** 자동 산출 충진율: **{final_ratio:.2f}%**")
+                st.error(f"🚨 **[기준 80% 미달 (불합격)]** 보정 후 충진율: **{final_ratio:.2f}%**")
 
             now = datetime.now()
             new_record = {
                 "사진 이름": uploaded_file.name,
                 "시간": now.strftime("%H:%M:%S"),
-                "적용 알고리즘": algo_option,
-                "자동 산출 충진율": f"{final_ratio:.2f}%"
+                "빛번짐 보정": "적용" if fix_glare else "미적용",
+                "최종 충진율": f"{final_ratio:.2f}%"
             }
             
             if not st.session_state.history or st.session_state.history[0]["시간"] != new_record["시간"]:
