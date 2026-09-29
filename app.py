@@ -81,18 +81,12 @@ if uploaded_file is not None:
     if full_img is None:
         st.error("❌ 이미지를 불러올 수 없습니다.")
     else:
-        full_h, full_w = full_img.shape[:2]
-        if full_h > full_w:
-            orig_img = full_img[0:int(full_h * 0.33), :]
-        else:
-            orig_img = full_img
-            
+        # 📌 원본 이미지 자르기 없이 그대로 사용
+        orig_img = full_img
         img_h, img_w = orig_img.shape[:2]
         
-        # 📌 안내 문구
         st.markdown('<div class="sub-instruction">📌 <b>RGB 타일 영역 4개 모서리 클릭:</b> 1.좌상 ➔ 2.우상 ➔ 3.우하 ➔ 4.좌하</div>', unsafe_allow_html=True)
         
-        # 📌 기존보다 캔버스 크기를 크게 확장 (360px -> 520px)
         canvas_w = 520
         canvas_h = int(img_h * (canvas_w / img_w))
         
@@ -106,7 +100,6 @@ if uploaded_file is not None:
             cv2.putText(draw_img, str(i+1), (p[0]+12, p[1]+6), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
             cv2.putText(draw_img, str(i+1), (p[0]+12, p[1]+6), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
 
-        # 📌 화면 전체 폭을 높게 활용하기 위해 3개 컬럼의 비율을 크게 설정
         col1, col2, col3 = st.columns([1, 1, 1])
         
         with col1:
@@ -148,7 +141,7 @@ if uploaded_file is not None:
             warped_img = cv2.warpPerspective(orig_img, matrix, (TARGET_W, TARGET_H))
             warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
             
-            # 📌 가중치 방식 색상 영역 추출 (초록 1.0, 노랑 0.4)
+            # 가중치 방식 색상 영역 추출 (초록 1.0, 노랑 0.4)
             hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
             
             lower_green = np.array([36, 40, 40])
@@ -210,9 +203,6 @@ if uploaded_file is not None:
                 st.markdown("##### 3. 진단 마스크")
                 st.info("분석 대기 중")
 
-        # =========================================================
-        # 📌 [수정] 평소에는 닫혀있고 필요할 때 열어보는 접이식 이력 창 (st.expander)
-        # =========================================================
         st.markdown("<br>", unsafe_allow_html=True)
         with st.expander("📋 **분석 이력 기록 열기 / 닫기**", expanded=False):
             if st.session_state.history:
