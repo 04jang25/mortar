@@ -66,7 +66,7 @@ if "coord_key" not in st.session_state:
 st.markdown("""
     <div class="title-card">
         <h1>🔥 열화상 타일 정밀 충진율 분석 시스템</h1>
-        <p>노이즈 억제 & CLAHE 전처리 적용 모듈</p>
+        <p>HSV 마스크 기반 충진율 측정 모듈</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -148,18 +148,12 @@ if uploaded_file is not None:
             warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
             
             # ---------------------------------------------------------
-            # 🛠️ 이미지 전처리 (노이즈 보정)
+            # 🛠️ 이미지 전처리 (가우시안 블러 노이즈 보정만 적용)
             # ---------------------------------------------------------
             blurred_img = cv2.GaussianBlur(warped_img, (5, 5), 0)
 
-            lab = cv2.cvtColor(blurred_img, cv2.COLOR_BGR2LAB)
-            l, a, b = cv2.split(lab)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-            cl = clahe.apply(l)
-            limg = cv2.merge((cl, a, b))
-            enhanced_img = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
-
-            hsv = cv2.cvtColor(enhanced_img, cv2.COLOR_BGR2HSV)
+            # 원본 색상을 그대로 유지하기 위해 CLAHE 제외 후 바로 HSV 변환
+            hsv = cv2.cvtColor(blurred_img, cv2.COLOR_BGR2HSV)
             
             # ---------------------------------------------------------
             # 🎨 HSV 마스크 검출
