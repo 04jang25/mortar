@@ -66,12 +66,12 @@ if "coord_key" not in st.session_state:
 st.markdown("""
     <div class="title-card">
         <h1>🔥 열화상 타일 정밀 충진율 분석 시스템</h1>
-        <p>냉각 상태 보정 및 동적 HSV 민감도 분석 솔루션</p>
+        <p>냉각 상태 보정 및 동적 HSV 민감도 분석 솔루션 (노란색: 고온 / 초록색: 식음)</p>
     </div>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 📌 사이드바: 촬영자/냉각 상태에 따른 민감도 옵션 추가
+# 📌 사이드바: 초록색(식음) 중심 민감도 옵션 설정
 # ---------------------------------------------------------
 st.sidebar.header("📁 이미지 및 실험 조건")
 uploaded_file = st.sidebar.file_uploader("열화상 사진 선택", type=["jpg", "jpeg", "png", "bmp"])
@@ -80,19 +80,21 @@ st.sidebar.markdown("---")
 st.sidebar.header("⚙️ 냉각 상태 / 민감도 설정")
 mode = st.sidebar.radio(
     "시편 냉각 상태 선택",
-    ["기본 (일반 냉각 - 초록 중심)", "많이 식음 (노란색 우세)", "사용자 지정 (직접 조절)"]
+    ["기본 (적정 냉각 - 노랑 중심)", "많이 식음 (초록색 우세)", "사용자 지정 (직접 조절)"]
 )
 
-if mode == "기본 (일반 냉각 - 초록 중심)":
-    yellow_weight = 0.4
-    yellow_h_min, yellow_h_max = 24, 35
-elif mode == "많이 식음 (노란색 우세)":
-    yellow_weight = 0.8  # 많이 식은 시편은 노란색도 충진재로 인정해 가중치를 상승
-    yellow_h_min, yellow_h_max = 18, 38  # 노란색 영역 색상 범위를 넓힘
+# 노란색 = 완전 충진 (100% 반영)
+# 초록색 = 더 많이 식어가는 충진 영역 (가중치 조정)
+if mode == "기본 (적정 냉각 - 노랑 중심)":
+    green_weight = 0.4
+    green_h_min, green_h_max = 36, 85
+elif mode == "많이 식음 (초록색 우세)":
+    green_weight = 0.8  # 많이 식은 시편은 초록색도 충진재로 크게 인정 (80% 반영)
+    green_h_min, green_h_max = 30, 95  # 식어서 변한 초록색/연두색 범위를 넓혀 감지
 else:
-    yellow_weight = st.sidebar.slider("노란색 가중치 (0.0 ~ 1.0)", 0.0, 1.0, 0.5, 0.05)
-    yellow_h_min = st.sidebar.slider("노란색 최소 Hue", 10, 30, 20)
-    yellow_h_max = st.sidebar.slider("노란색 최대 Hue", 31, 45, 36)
+    green_weight = st.sidebar.slider("초록색(식은 부위) 가중치 (0.0 ~ 1.0)", 0.0, 1.0, 0.5, 0.05)
+    green_h_min = st.sidebar.slider("초록색 최소 Hue", 25, 45, 36)
+    green_h_max = st.sidebar.slider("초록색 최대 Hue", 70, 100, 85)
 
 if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -168,35 +170,36 @@ if uploaded_file is not None:
             # HSV 변환
             hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
             
-            # 초록 영역
-            lower_green = np.array([36, 40, 40])
-            upper_green = np.array([85, 255, 255])
-            mask_green = cv2.inRange(hsv, lower_green, upper_green)
-            
-            # 노란 영역 (설정된 모드/슬라이더 값 동적 적용)
-            lower_yellow = np.array([yellow_h_min, 30, 40])
-            upper_yellow = np.array([yellow_h_max, 255, 255])
+            # 1. 노란색 영역 (뜨거운 완전 충진 영역: 100% 충진)
+            lower_yellow = np.array([18, 30, 40])
+            upper_yellow = np.array([35, 255, 255])
             mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+            
+            # 2. 초록색 영역 (더 많이 식은 충진 영역: 설정된 가중치 적용)
+            lower_green = np.array([green_h_min, 30, 40])
+            upper_green = np.array([green_h_max, 255, 255])
+            mask_green = cv2.inRange(hsv, lower_green, upper_green)
 
             # 노이즈 제거
             kernel = np.ones((3, 3), np.uint8)
-            mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_OPEN, kernel)
             mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_OPEN, kernel)
+            mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_OPEN, kernel)
             
+            # 마스크 시각화 (노란색: 255 / 초록색: 180)
             display_mask = np.zeros((TARGET_H, TARGET_W), dtype=np.uint8)
-            display_mask[mask_green == 255] = 255
-            display_mask[mask_yellow == 255] = 180
+            display_mask[mask_yellow == 255] = 255
+            display_mask[mask_green == 255] = 180
             display_mask_bgr = cv2.cvtColor(display_mask, cv2.COLOR_GRAY2BGR)
 
-            green_pixels = np.sum(mask_green == 255)
             yellow_pixels = np.sum(mask_yellow == 255)
+            green_pixels = np.sum(mask_green == 255)
             total_pixels = TARGET_W * TARGET_H
 
-            green_pct = (green_pixels / total_pixels) * 100.0
             yellow_pct = (yellow_pixels / total_pixels) * 100.0
+            green_pct = (green_pixels / total_pixels) * 100.0
             
-            # 동적 가중치 계산 적용
-            final_ratio = green_pct + (yellow_pct * yellow_weight)
+            # 최종 계산: 노란색(뜨거움) 100% + 초록색(식음) * 선택된 가중치
+            final_ratio = yellow_pct + (green_pct * green_weight)
 
             with col2:
                 st.markdown("##### 2. 정면 보정")
@@ -208,7 +211,7 @@ if uploaded_file is not None:
 
             st.markdown("<br>", unsafe_allow_html=True)
             
-            st.info(f"🟢 완전 충진(초록): **{green_pct:.2f}%** | 🟡 일부/식은 충진(노랑): **{yellow_pct:.2f}%** (적용 가중치: {int(yellow_weight*100)}%)")
+            st.info(f"🟡 고온 충진(노랑): **{yellow_pct:.2f}%** | 🟢 식은 충진(초록): **{green_pct:.2f}%** (적용 가중치: {int(green_weight*100)}%)")
 
             if final_ratio >= 80.0:
                 st.success(f"🎉 **[기준 80% 만족 (합격)]** 최종 가중 충진율: **{final_ratio:.2f}%**")
@@ -220,8 +223,8 @@ if uploaded_file is not None:
                 "사진 이름": uploaded_file.name,
                 "시간": now.strftime("%H:%M:%S"),
                 "냉각 모드": mode,
-                "완전 충진(초록)": f"{green_pct:.2f}%",
-                "식은 충진(노랑)": f"{yellow_pct:.2f}%",
+                "고온 충진(노랑)": f"{yellow_pct:.2f}%",
+                "식은 충진(초록)": f"{green_pct:.2f}%",
                 "최종 충진율": f"{final_ratio:.2f}%"
             }
             
