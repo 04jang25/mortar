@@ -66,12 +66,12 @@ if "coord_key" not in st.session_state:
 st.markdown("""
     <div class="title-card">
         <h1>🔥 열화상 타일 정밀 충진율 분석 시스템</h1>
-        <p>초록색 기본 100% 충진 & 노란색 우세도 기반 동적 가중치 분석 솔루션</p>
+        <p>노이즈 억제 & CLAHE 전처리 적용 모듈</p>
     </div>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 📌 사이드바: 사진 업로드 및 자동 판별 설명
+# 📌 사이드바: 사진 업로드 및 설명
 # ---------------------------------------------------------
 st.sidebar.header("📁 이미지 업로드")
 uploaded_file = st.sidebar.file_uploader("열화상 사진 선택", type=["jpg", "jpeg", "png", "bmp"])
@@ -157,26 +157,42 @@ if uploaded_file is not None:
             warped_img = cv2.warpPerspective(orig_img, matrix, (TARGET_W, TARGET_H))
             warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
             
-            # HSV 변환
-            hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
+            # ---------------------------------------------------------
+            # 🛠️ 이미지 전처리 강화 (흔들림/노이즈 보정)
+            # ---------------------------------------------------------
+            # 1. 가우시안 블러링으로 카메라 노이즈 및 흔들림 부드럽게 완화
+            blurred_img = cv2.GaussianBlur(warped_img, (5, 5), 0)
+
+            # 2. LAB 색공간 대비 향상 (CLAHE 적용)
+            lab = cv2.cvtColor(blurred_img, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            cl = clahe.apply(l)
+            limg = cv2.merge((cl, a, b))
+            enhanced_img = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+
+            # 3. HSV 변환
+            hsv = cv2.cvtColor(enhanced_img, cv2.COLOR_BGR2HSV)
             
             # ---------------------------------------------------------
-            # 🎨 HSV 마스크 검출 (중복 경계값 분리 적용)
+            # 🎨 HSV 마스크 검출 (어둡거나 손상된 영역도 정상 반영하도록 범주 확장)
             # ---------------------------------------------------------
-            # 1. 노란색 검출 (Hue: 18 ~ 34)
-            lower_yellow = np.array([18, 30, 40])
-            upper_yellow = np.array([34, 255, 255])  # 34까지 설정하여 초록색과의 중복 방지
+            # 노란색 (Hue: 15 ~ 34, Saturation/Value 최소값 15로 완화)
+            lower_yellow = np.array([15, 15, 20])
+            upper_yellow = np.array([34, 255, 255])
             mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
             
-            # 2. 초록색 검출 (Hue: 35 ~ 95)
-            lower_green = np.array([35, 30, 40])    # 35부터 시작하여 노란색과 분리
+            # 초록색 (Hue: 35 ~ 95, Saturation/Value 최소값 15로 완화)
+            lower_green = np.array([35, 15, 20])
             upper_green = np.array([95, 255, 255])
             mask_green = cv2.inRange(hsv, lower_green, upper_green)
 
-            # 노이즈 제거
-            kernel = np.ones((3, 3), np.uint8)
-            mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_OPEN, kernel)
-            mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_OPEN, kernel)
+            # ---------------------------------------------------------
+            # 🧹 형태학적 보정 (모폴로지 닫힘 연산으로 노이즈 구멍 메우기)
+            # ---------------------------------------------------------
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_CLOSE, kernel)
+            mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_CLOSE, kernel)
             
             # 픽셀 수 및 면적 비율 계산
             yellow_pixels = np.sum(mask_yellow == 255)
@@ -193,16 +209,16 @@ if uploaded_file is not None:
             
             if green_pixels > yellow_pixels:
                 auto_mode = "초록색 우세 (초록 > 노랑)"
-                yellow_weight = 0.4  # 초록색 우세 시 노란색 40%만 반영
+                yellow_weight = 0.4
             else:
                 auto_mode = "노란색 우세 (노랑 >= 초록)"
-                yellow_weight = 1.0  # 노란색 우세 시 노란색도 100% 전부 반영
+                yellow_weight = 1.0
 
-            # 최종 가중 충진율 계산 (최대 100% 상한 설정)
+            # 최종 가중 충진율 계산 (최대 100% 상한)
             calculated_ratio = (green_pct * green_weight) + (yellow_pct * yellow_weight)
             final_ratio = min(calculated_ratio, 100.0)
 
-            # 마스크 시각화 (노란색: 255 / 초록색: 180)
+            # 마스크 시각화
             display_mask = np.zeros((TARGET_H, TARGET_W), dtype=np.uint8)
             display_mask[mask_yellow == 255] = 255
             display_mask[mask_green == 255] = 180
