@@ -7,7 +7,7 @@ from PIL import Image
 from streamlit_image_coordinates import streamlit_image_coordinates
 
 st.set_page_config(
-    page_title="열화상 타일 빛 번짐 보정 자동 충진율 분석 시스템",
+    page_title="열화상 타일 빛번짐 완전자동 보정 분석 시스템",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -65,23 +65,19 @@ if "coord_key" not in st.session_state:
 
 st.markdown("""
     <div class="title-card">
-        <h1>📊 빛 번짐(포화) 보정 열화상 타일 충진율 분석 시스템</h1>
-        <p>Otsu 적응형 이진화 + 흰색 포화 영역(최고온도 지점) 자동 감지 융합</p>
+        <h1>📊 빛번짐(포화) 완전 자동 보정 열화상 분석 시스템</h1>
+        <p>수동 수치 조정 없이 빛번짐/최고온도 영역 자동 포화 감지 알고리즘 적용</p>
     </div>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 📌 사이드바 옵션
+# 📌 사이드바
 # ---------------------------------------------------------
-st.sidebar.header("📁 이미지 및 빛 번짐 보정 설정")
+st.sidebar.header("📁 이미지 업로드")
 uploaded_file = st.sidebar.file_uploader("열화상 사진 선택", type=["jpg", "jpeg", "png", "bmp"])
 
 st.sidebar.markdown("---")
-st.sidebar.header("☀️ 빛 번짐(흰색 영역) 보정 옵션")
-fix_glare = st.sidebar.checkbox("빛 번짐/흰색 포화 영역 자동 포함", value=True)
-white_thresh = st.sidebar.slider("흰색 포화 감지 기준 (RGB 명도)", 200, 255, 235)
-
-st.sidebar.caption("💡 **원리:** 열화상 촬영 시 빛 반사나 최고 온도로 인해 흰색으로 번진 영역을 '가장 뜨거운 충진 영역'으로 판별하여 분석 결과에 100% 반영합니다.")
+st.sidebar.success("🤖 **자동 보정 모드 활성화됨**\n\n별도의 슬라이더 조작 없이, 알고리즘이 이미지 분석을 통해 빛번짐 영역을 스스로 판별 및 보정합니다.")
 
 if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -154,34 +150,38 @@ if uploaded_file is not None:
             warped_img = cv2.warpPerspective(orig_img, matrix, (TARGET_W, TARGET_H))
             warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
             
-            # --- 1. 대비 선명화 (CLAHE 적용) ---
+            # --- 1. CLAHE 적용으로 명암 대비 자동 선명화 ---
             gray_img = cv2.cvtColor(warped_img, cv2.COLOR_BGR2GRAY)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8,8))
             enhanced_gray = clahe.apply(gray_img)
             blurred = cv2.GaussianBlur(enhanced_gray, (5, 5), 0)
             
-            # --- 2. Otsu 적응형 이진화 ---
-            otsu_thresh, binary_mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            # --- 2. Otsu 적응형 이진화 (일반 고온 충진 영역 추출) ---
+            otsu_thresh, otsu_mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             
-            # --- 3. 빛 번짐 / 흰색 포화 영역 보정 (White Glare Mask) ---
-            if fix_glare:
-                # RGB 모든 채널이 설정값 이상으로 매우 높은 영역 (흰색 포화 지점)
-                white_mask = cv2.inRange(warped_rgb, 
-                                         np.array([white_thresh, white_thresh, white_thresh]), 
-                                         np.array([255, 255, 255]))
-                
-                # Otsu 이진화 마스크와 흰색 포화 마스크를 합성(OR 연산)
-                combined_mask = cv2.bitwise_or(binary_mask, white_mask)
-            else:
-                combined_mask = binary_mask
+            # --- 3. [핵심] 빛번짐/흰색 포화 영역 완전 자동 산출 (Auto Saturation Mask) ---
+            # HSV의 V(Value/명도) 채널과 LAB의 L(Luminance/밝기) 채널을 함께 분석
+            hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
+            val_channel = hsv[:, :, 2]
+            
+            # 이미지 내부의 명도 분포를 분석하여 상위 95% 백분위수 이상(극단적 밝음)을 자동 임계값으로 설정
+            auto_glare_thresh = np.percentile(val_channel, 95)
+            
+            # 최소 안전 기준선 설정 (명도 220 이상이면서 상위 밝기 영역)
+            auto_glare_thresh = max(auto_glare_thresh, 220)
+            
+            # 자동 포화(빛번짐) 마스크 생성
+            auto_glare_mask = cv2.inRange(val_channel, int(auto_glare_thresh), 255)
+            
+            # --- 4. Otsu 마스크 + 빛번짐 자동 마스크 논리적 합성 (OR 연산) ---
+            combined_mask = cv2.bitwise_or(otsu_mask, auto_glare_mask)
 
-            # --- 4. 노이즈 및 자잘한 구멍 메우기 (Morphological Closing) ---
+            # --- 5. 노이즈 정리 및 모폴로지 닫기 (빛번짐 자잘한 구멍 메우기) ---
             kernel = np.ones((5, 5), np.uint8)
-            # MORPH_CLOSE: 팽창 후 침식을 수행하여 내부의 자잘한 미충진/빛번짐 구멍을 메움
             final_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
             final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel)
 
-            # 비율 계산
+            # 충진율 계산
             filled_pixels = np.sum(final_mask == 255)
             total_pixels = TARGET_W * TARGET_H
             final_ratio = (filled_pixels / total_pixels) * 100.0
@@ -194,23 +194,24 @@ if uploaded_file is not None:
                 st.image(warped_rgb, use_container_width=True)
             
             with col3:
-                st.markdown("##### 3. 보정 진단 마스크")
+                st.markdown("##### 3. 빛번짐 자동보정 마스크")
                 st.image(display_mask_bgr, use_container_width=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
             
-            st.info(f"🤖 **[자동 연산 정보]:** Otsu 경계값: {otsu_thresh:.1f} | 빛 번짐 보정: {'적용됨' if fix_glare else '미적용'}")
+            st.info(f"🤖 **[자동 연산 파라미터]:** Otsu 경계값: `{otsu_thresh:.1f}` | 빛번짐 자동 감지 명도 threshold: `{auto_glare_thresh:.1f}`")
 
             if final_ratio >= 80.0:
-                st.success(f"🎉 **[기준 80% 만족 (합격)]** 보정 후 충진율: **{final_ratio:.2f}%**")
+                st.success(f"🎉 **[기준 80% 만족 (합격)]** 빛번짐 보정 충진율: **{final_ratio:.2f}%**")
             else:
-                st.error(f"🚨 **[기준 80% 미달 (불합격)]** 보정 후 충진율: **{final_ratio:.2f}%**")
+                st.error(f"🚨 **[기준 80% 미달 (불합격)]** 빛번짐 보정 충진율: **{final_ratio:.2f}%**")
 
             now = datetime.now()
             new_record = {
                 "사진 이름": uploaded_file.name,
                 "시간": now.strftime("%H:%M:%S"),
-                "빛번짐 보정": "적용" if fix_glare else "미적용",
+                "Otsu Threshold": f"{otsu_thresh:.1f}",
+                "빛번짐 감지 Threshold": f"{auto_glare_thresh:.1f}",
                 "최종 충진율": f"{final_ratio:.2f}%"
             }
             
