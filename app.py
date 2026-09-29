@@ -67,7 +67,7 @@ if "coord_key" not in st.session_state:
 st.markdown("""
     <div class="title-card">
         <h1>🔥 열화상 타일 정밀 충진율 분석 시스템</h1>
-        <p>열화상 정밀 이진화 채널 분석 및 충진율 진단 솔루션</p>
+        <p>열화상 HSV 채널 가중 분석(초록 100%, 노랑 40%) 및 충진율 진단 솔루션</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -149,42 +149,35 @@ if uploaded_file is not None:
                 warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
                 
                 # =========================================================
-                # 📌 [고온 영역(노랑/주황/빨강) 정밀 고정 추출 알고리즘]
+                # 📌 [가중치 방식 색상 영역 추출 알고리즘 (초록 1.0, 노랑 0.4)]
                 # =========================================================
-                # 1. LAB 색상 공간으로 변환 (A 채널: 초록↔빨강, L 채널: 밝기)
-                lab = cv2.cvtColor(warped_img, cv2.COLOR_BGR2LAB)
-                l_chan, a_chan, b_chan = cv2.split(lab)
-                
-                # 2. HSV 색상 공간에서 붉은색/주황색/노란색 영역 마스킹
+                # 1. HSV 색상 공간으로 변환
                 hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
                 
-                # 주황/노랑/빨강 (Hue: 0 ~ 30, Saturation > 70, Value > 120)
-                lower_warm1 = np.array([0, 70, 120])
-                upper_warm1 = np.array([30, 255, 255])
+                # 2. 🟢 초록색 영역 마스킹 (100% 충진 구역)
+                lower_green = np.array([36, 40, 40])
+                upper_green = np.array([85, 255, 255])
+                mask_green = cv2.inRange(hsv, lower_green, upper_green)
                 
-                # 진한 빨강 (Hue: 160 ~ 180, Saturation > 70, Value > 120)
-                lower_warm2 = np.array([160, 70, 120])
-                upper_warm2 = np.array([180, 255, 255])
+                # 3. 🟡 노란색 영역 마스킹 (40% 충진 구역)
+                lower_yellow = np.array([24, 40, 40])
+                upper_yellow = np.array([35, 255, 255])
+                mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
                 
-                mask_hsv1 = cv2.inRange(hsv, lower_warm1, upper_warm1)
-                mask_hsv2 = cv2.inRange(hsv, lower_warm2, upper_warm2)
-                mask_hsv = cv2.bitwise_or(mask_hsv1, mask_hsv2)
-                
-                # 3. LAB A-채널(붉은색 성분 강도 > 135) 조건과 결합하여 배경(초록) 완벽 제외
-                _, mask_lab_a = cv2.threshold(a_chan, 135, 255, cv2.THRESH_BINARY)
-                
-                # 충진 영역(고온 부위) = HSV 고온 마스크 AND LAB 붉은색 마스크
-                mask_filled = cv2.bitwise_and(mask_hsv, mask_lab_a)
-                
-                # 4. 노이즈 제거 (Morphology Opening)
-                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                mask_filled = cv2.morphologyEx(mask_filled, cv2.MORPH_OPEN, kernel)
-                
-                total_pixels = TARGET_W * TARGET_H
-                filled_pixels = np.count_nonzero(mask_filled == 255)
-                final_ratio = (filled_pixels / total_pixels) * 100.0
+                # 4. 진단 마스크 시각화 (초록: 흰색 255 / 노랑: 회색 180 / 기타: 검은색 0)
+                display_mask = np.zeros((TARGET_H, TARGET_W), dtype=np.uint8)
+                display_mask[mask_green == 255] = 255
+                display_mask[mask_yellow == 255] = 180
+                display_mask_bgr = cv2.cvtColor(display_mask, cv2.COLOR_GRAY2BGR)
 
-                display_mask = cv2.cvtColor(mask_filled, cv2.COLOR_GRAY2BGR)
+                # 5. 픽셀 수 및 가중 충진율 계산
+                green_pixels = np.sum(mask_green == 255)
+                yellow_pixels = np.sum(mask_yellow == 255)
+                total_pixels = TARGET_W * TARGET_H
+
+                # 초록색 1.0(100%), 노란색 0.4(40%) 가중치 계산
+                weighted_filled_pixels = (green_pixels * 1.0) + (yellow_pixels * 0.4)
+                final_ratio = (weighted_filled_pixels / total_pixels) * 100.0
 
                 with col2:
                     st.markdown("##### 2. 정면 보정")
@@ -192,19 +185,27 @@ if uploaded_file is not None:
                 
                 with col3:
                     st.markdown("##### 3. 진단 마스크 (BW)")
-                    st.image(display_mask, use_container_width=True)
+                    st.image(display_mask_bgr, use_container_width=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
+                
+                # 면적 세부 정보 표시
+                green_pct = (green_pixels / total_pixels) * 100
+                yellow_pct = (yellow_pixels / total_pixels) * 100
+                st.info(f"🟢 완전 충진(초록): **{green_pct:.2f}%** | 🟡 일부 충진(노랑): **{yellow_pct:.2f}%** (가중치 40% 적용)")
+
                 if final_ratio >= 80.0:
-                    st.success(f"🎉 **[기준 80% 만족 (합격)]** 최종 충진율: **{final_ratio:.2f}%**")
+                    st.success(f"🎉 **[기준 80% 만족 (합격)]** 최종 가중 충진율: **{final_ratio:.2f}%**")
                 else:
-                    st.error(f"🚨 **[기준 80% 미달 (불합격)]** 최종 충진율: **{final_ratio:.2f}%**")
+                    st.error(f"🚨 **[기준 80% 미달 (불합격)]** 최종 가중 충진율: **{final_ratio:.2f}%**")
 
                 now = datetime.now()
                 new_record = {
                     "사진 이름": uploaded_file.name,
                     "시간": now.strftime("%H:%M:%S"),
-                    "충진율": f"{final_ratio:.2f}%"
+                    "완전 충진(초록)": f"{green_pct:.1f}%",
+                    "일부 충진(노랑)": f"{yellow_pct:.1f}%",
+                    "최종 충진율": f"{final_ratio:.2f}%"
                 }
                 
                 if not st.session_state.history or st.session_state.history[0]["시간"] != new_record["시간"]:
