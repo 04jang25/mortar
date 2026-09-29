@@ -7,7 +7,7 @@ from PIL import Image
 from streamlit_image_coordinates import streamlit_image_coordinates
 
 st.set_page_config(
-    page_title="열화상 타일 정밀 충진율 분석 시스템",
+    page_title="열화상 타일 객관적 적응형 충진율 분석 시스템",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -19,14 +19,14 @@ st.markdown("""
         .stApp { background-color: #f8fafc; color: #0f172a; }
         .block-container { padding-top: 1.5rem !important; padding-bottom: 2rem !important; max-width: 95% !important; }
         .title-card {
-            background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+            background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
             padding: 1.5rem 2rem;
             border-radius: 14px;
             box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
             margin-bottom: 1.5rem;
         }
         .title-card h1 { color: #ffffff !important; font-size: 2.2rem !important; font-weight: 800 !important; margin: 0 !important; }
-        .title-card p { color: #dbeafe !important; font-size: 1.15rem !important; margin-top: 0.5rem !important; }
+        .title-card p { color: #93c5fd !important; font-size: 1.15rem !important; margin-top: 0.5rem !important; }
         .sub-instruction {
             background-color: #ffffff;
             padding: 1rem 1.2rem;
@@ -65,36 +65,25 @@ if "coord_key" not in st.session_state:
 
 st.markdown("""
     <div class="title-card">
-        <h1>🔥 열화상 타일 정밀 충진율 분석 시스템</h1>
-        <p>냉각 상태 보정 및 동적 HSV 민감도 분석 솔루션 (노란색: 고온 / 초록색: 식음)</p>
+        <h1>📊 열화상 타일 객관적 적응형 충진율 분석 시스템</h1>
+        <p>알고리즘 기반 자동 경계 산출 (Otsu & K-Means 알고리즘)</p>
     </div>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 📌 사이드바: 초록색(식음) 중심 민감도 옵션 설정
+# 📌 사이드바: 객관적 분석 알고리즘 선택
 # ---------------------------------------------------------
-st.sidebar.header("📁 이미지 및 실험 조건")
+st.sidebar.header("📁 이미지 및 알고리즘 설정")
 uploaded_file = st.sidebar.file_uploader("열화상 사진 선택", type=["jpg", "jpeg", "png", "bmp"])
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ 냉각 상태 / 민감도 설정")
-mode = st.sidebar.radio(
-    "시편 냉각 상태 선택",
-    ["기본 (적정 냉각 - 노랑 중심)", "많이 식음 (초록색 우세)", "사용자 지정 (직접 조절)"]
+st.sidebar.header("🤖 자동 분할 알고리즘 선택")
+algo_option = st.sidebar.radio(
+    "알고리즘 종류",
+    ["Otsu 적응형 이진화 (권장)", "K-Means 머신러닝 군집화", "Adaptive Gaussian Threshold"]
 )
 
-# 노란색 = 완전 충진 (100% 반영)
-# 초록색 = 더 많이 식어가는 충진 영역 (가중치 조정)
-if mode == "기본 (적정 냉각 - 노랑 중심)":
-    green_weight = 0.4
-    green_h_min, green_h_max = 36, 85
-elif mode == "많이 식음 (초록색 우세)":
-    green_weight = 0.8  # 많이 식은 시편은 초록색도 충진재로 크게 인정 (80% 반영)
-    green_h_min, green_h_max = 30, 95  # 식어서 변한 초록색/연두색 범위를 넓혀 감지
-else:
-    green_weight = st.sidebar.slider("초록색(식은 부위) 가중치 (0.0 ~ 1.0)", 0.0, 1.0, 0.5, 0.05)
-    green_h_min = st.sidebar.slider("초록색 최소 Hue", 25, 45, 36)
-    green_h_max = st.sidebar.slider("초록색 최대 Hue", 70, 100, 85)
+st.sidebar.caption("💡 **설명:** 사용자가 가중치나 색상 수치를 지정하지 않고, 이미지 내의 온도 히스토그램을 알고리즘이 스스로 계산하여 분할합니다.")
 
 if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -150,7 +139,7 @@ if uploaded_file is not None:
                     st.rerun()
                     
             with col_btn2:
-                run_btn = st.button("🚀 분석 실행", disabled=(len(st.session_state.pts) != 4), type="primary", use_container_width=True)
+                run_btn = st.button("🚀 자동 분석 실행", disabled=(len(st.session_state.pts) != 4), type="primary", use_container_width=True)
 
         if run_btn and len(st.session_state.pts) == 4:
             clicked_pts = []
@@ -167,65 +156,76 @@ if uploaded_file is not None:
             warped_img = cv2.warpPerspective(orig_img, matrix, (TARGET_W, TARGET_H))
             warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
             
-            # HSV 변환
-            hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
+            # --- 객관적 자동 분할 알고리즘 연산 ---
+            gray_img = cv2.cvtColor(warped_img, cv2.COLOR_BGR2GRAY)
+            # 가우시안 블러로 노이즈 제거
+            blurred = cv2.GaussianBlur(gray_img, (5, 5), 0)
             
-            # 1. 노란색 영역 (뜨거운 완전 충진 영역: 100% 충진)
-            lower_yellow = np.array([18, 30, 40])
-            upper_yellow = np.array([35, 255, 255])
-            mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
-            
-            # 2. 초록색 영역 (더 많이 식은 충진 영역: 설정된 가중치 적용)
-            lower_green = np.array([green_h_min, 30, 40])
-            upper_green = np.array([green_h_max, 255, 255])
-            mask_green = cv2.inRange(hsv, lower_green, upper_green)
+            if algo_option == "Otsu 적응형 이진화 (권장)":
+                # Otsu 알고리즘: 히스토그램 분산 극대화를 통한 자동 임계값(Threshold) 찾기
+                otsu_thresh, binary_mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                auto_info = f"자동 결정된 경계값(Otsu Threshold): {otsu_thresh:.1f}"
 
-            # 노이즈 제거
+            elif algo_option == "K-Means 머신러닝 군집화":
+                # K-Means: 색상/온도 특성을 2개 군집(충진/미충진)으로 머신러닝 자동 분할
+                pixel_values = warped_img.reshape((-1, 3))
+                pixel_values = np.float32(pixel_values)
+                criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
+                k = 2
+                _, labels, centers = cv2.kmeans(pixel_values, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+                
+                # 더 밝은/온도가 높은 클러스터 인덱스 탐색
+                centers = np.uint8(centers)
+                brightness = np.mean(centers, axis=1)
+                high_temp_cluster = np.argmax(brightness)
+                
+                binary_mask = (labels == high_temp_cluster).astype(np.uint8) * 255
+                binary_mask = binary_mask.reshape((TARGET_H, TARGET_W))
+                auto_info = "K-Means (K=2) 클러스터링으로 고온 영역 자동 분할"
+
+            else:
+                # Gaussian Adaptive Thresholding
+                binary_mask = cv2.adaptiveThreshold(
+                    blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                    cv2.THRESH_BINARY, 11, 2
+                )
+                auto_info = "국소 영역 Gaussian 적응형 이진화 적용"
+
+            # 모폴로지 연산으로 자잘한 노이즈 정리
             kernel = np.ones((3, 3), np.uint8)
-            mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_OPEN, kernel)
-            mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_OPEN, kernel)
-            
-            # 마스크 시각화 (노란색: 255 / 초록색: 180)
-            display_mask = np.zeros((TARGET_H, TARGET_W), dtype=np.uint8)
-            display_mask[mask_yellow == 255] = 255
-            display_mask[mask_green == 255] = 180
-            display_mask_bgr = cv2.cvtColor(display_mask, cv2.COLOR_GRAY2BGR)
+            binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_OPEN, kernel)
 
-            yellow_pixels = np.sum(mask_yellow == 255)
-            green_pixels = np.sum(mask_green == 255)
+            # 비율 계산
+            filled_pixels = np.sum(binary_mask == 255)
             total_pixels = TARGET_W * TARGET_H
+            final_ratio = (filled_pixels / total_pixels) * 100.0
 
-            yellow_pct = (yellow_pixels / total_pixels) * 100.0
-            green_pct = (green_pixels / total_pixels) * 100.0
-            
-            # 최종 계산: 노란색(뜨거움) 100% + 초록색(식음) * 선택된 가중치
-            final_ratio = yellow_pct + (green_pct * green_weight)
+            # 마스크 시각화 (2채널 흑백)
+            display_mask_bgr = cv2.cvtColor(binary_mask, cv2.COLOR_GRAY2BGR)
 
             with col2:
                 st.markdown("##### 2. 정면 보정")
                 st.image(warped_rgb, use_container_width=True)
             
             with col3:
-                st.markdown("##### 3. 진단 마스크 (BW)")
+                st.markdown("##### 3. 자동 진단 마스크 (Otsu)")
                 st.image(display_mask_bgr, use_container_width=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
             
-            st.info(f"🟡 고온 충진(노랑): **{yellow_pct:.2f}%** | 🟢 식은 충진(초록): **{green_pct:.2f}%** (적용 가중치: {int(green_weight*100)}%)")
+            st.info(f"🤖 **[자동 연산 정보]:** {auto_info}")
 
             if final_ratio >= 80.0:
-                st.success(f"🎉 **[기준 80% 만족 (합격)]** 최종 가중 충진율: **{final_ratio:.2f}%**")
+                st.success(f"🎉 **[기준 80% 만족 (합격)]** 자동 산출 충진율: **{final_ratio:.2f}%**")
             else:
-                st.error(f"🚨 **[기준 80% 미달 (불합격)]** 최종 가중 충진율: **{final_ratio:.2f}%**")
+                st.error(f"🚨 **[기준 80% 미달 (불합격)]** 자동 산출 충진율: **{final_ratio:.2f}%**")
 
             now = datetime.now()
             new_record = {
                 "사진 이름": uploaded_file.name,
                 "시간": now.strftime("%H:%M:%S"),
-                "냉각 모드": mode,
-                "고온 충진(노랑)": f"{yellow_pct:.2f}%",
-                "식은 충진(초록)": f"{green_pct:.2f}%",
-                "최종 충진율": f"{final_ratio:.2f}%"
+                "적용 알고리즘": algo_option,
+                "자동 산출 충진율": f"{final_ratio:.2f}%"
             }
             
             if not st.session_state.history or st.session_state.history[0]["시간"] != new_record["시간"]:
