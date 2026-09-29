@@ -71,20 +71,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 📌 사이드바: 사진 업로드 및 설명
+# 📌 사이드바: 사진 업로드
 # ---------------------------------------------------------
 st.sidebar.header("📁 이미지 업로드")
 uploaded_file = st.sidebar.file_uploader("열화상 사진 선택", type=["jpg", "jpeg", "png", "bmp"])
-
-st.sidebar.markdown("---")
-st.sidebar.header("🤖 동적 가중치 분석 로직")
-st.sidebar.success("""
-💡 **분석 기준**
-- 🟢 **초록색**: 기본 **100%** 충진 인정
-- 🟡 **노란색**:
-  - 초록색 우세 시 $\rightarrow$ **40%** 인정
-  - 노란색 우세 시 $\rightarrow$ **100%** 인정
-""")
 
 if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -158,12 +148,10 @@ if uploaded_file is not None:
             warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
             
             # ---------------------------------------------------------
-            # 🛠️ 이미지 전처리 강화 (흔들림/노이즈 보정)
+            # 🛠️ 이미지 전처리 (노이즈 보정)
             # ---------------------------------------------------------
-            # 1. 가우시안 블러링으로 카메라 노이즈 및 흔들림 부드럽게 완화
             blurred_img = cv2.GaussianBlur(warped_img, (5, 5), 0)
 
-            # 2. LAB 색공간 대비 향상 (CLAHE 적용)
             lab = cv2.cvtColor(blurred_img, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
@@ -171,30 +159,23 @@ if uploaded_file is not None:
             limg = cv2.merge((cl, a, b))
             enhanced_img = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
 
-            # 3. HSV 변환
             hsv = cv2.cvtColor(enhanced_img, cv2.COLOR_BGR2HSV)
             
             # ---------------------------------------------------------
-            # 🎨 HSV 마스크 검출 (어둡거나 손상된 영역도 정상 반영하도록 범주 확장)
+            # 🎨 HSV 마스크 검출
             # ---------------------------------------------------------
-            # 노란색 (Hue: 15 ~ 34, Saturation/Value 최소값 15로 완화)
             lower_yellow = np.array([15, 15, 20])
             upper_yellow = np.array([34, 255, 255])
             mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
             
-            # 초록색 (Hue: 35 ~ 95, Saturation/Value 최소값 15로 완화)
             lower_green = np.array([35, 15, 20])
             upper_green = np.array([95, 255, 255])
             mask_green = cv2.inRange(hsv, lower_green, upper_green)
 
-            # ---------------------------------------------------------
-            # 🧹 형태학적 보정 (모폴로지 닫힘 연산으로 노이즈 구멍 메우기)
-            # ---------------------------------------------------------
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
             mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_CLOSE, kernel)
             mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_CLOSE, kernel)
             
-            # 픽셀 수 및 면적 비율 계산
             yellow_pixels = np.sum(mask_yellow == 255)
             green_pixels = np.sum(mask_green == 255)
             total_pixels = TARGET_W * TARGET_H
@@ -202,11 +183,7 @@ if uploaded_file is not None:
             yellow_pct = (yellow_pixels / total_pixels) * 100.0
             green_pct = (green_pixels / total_pixels) * 100.0
 
-            # ---------------------------------------------------------
-            # 🤖 우세도 판별 및 가중치 적용
-            # ---------------------------------------------------------
-            green_weight = 1.0  # 초록색은 무조건 100% 반영
-            
+            green_weight = 1.0
             if green_pixels > yellow_pixels:
                 auto_mode = "초록색 우세 (초록 > 노랑)"
                 yellow_weight = 0.4
@@ -214,11 +191,9 @@ if uploaded_file is not None:
                 auto_mode = "노란색 우세 (노랑 >= 초록)"
                 yellow_weight = 1.0
 
-            # 최종 가중 충진율 계산 (최대 100% 상한)
             calculated_ratio = (green_pct * green_weight) + (yellow_pct * yellow_weight)
             final_ratio = min(calculated_ratio, 100.0)
 
-            # 마스크 시각화
             display_mask = np.zeros((TARGET_H, TARGET_W), dtype=np.uint8)
             display_mask[mask_yellow == 255] = 255
             display_mask[mask_green == 255] = 180
@@ -233,25 +208,17 @@ if uploaded_file is not None:
                 st.image(display_mask_bgr, use_container_width=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
-            
-            st.info(
-                f"🤖 **[자동 판별 상태]:** `{auto_mode}`\n\n"
-                f"🟢 **충진(초록): {green_pct:.2f}%** (가중치: 100%) | "
-                f"🟡 **충진(노랑): {yellow_pct:.2f}%** (적용 가중치: {int(yellow_weight*100)}%)"
-            )
 
+            # 부가적인 설명 없이 최종 충진율만 출력
             if final_ratio >= 80.0:
-                st.success(f"🎉 **[기준 80% 만족 (합격)]** 최종 가중 충진율: **{final_ratio:.2f}%**")
+                st.success(f"🎉 **[기준 80% 만족 (합격)]** 최종 충진율: **{final_ratio:.2f}%**")
             else:
-                st.error(f"🚨 **[기준 80% 미달 (불합격)]** 최종 가중 충진율: **{final_ratio:.2f}%**")
+                st.error(f"🚨 **[기준 80% 미달 (불합격)]** 최종 충진율: **{final_ratio:.2f}%**")
 
             now = datetime.now()
             new_record = {
                 "사진 이름": uploaded_file.name,
                 "시간": now.strftime("%H:%M:%S"),
-                "우세 상태": auto_mode,
-                "초록 충진 면적": f"{green_pct:.2f}%",
-                "노랑 충진 면적": f"{yellow_pct:.2f}% (가중치 {int(yellow_weight*100)}%)",
                 "최종 충진율": f"{final_ratio:.2f}%"
             }
             
