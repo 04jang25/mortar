@@ -7,7 +7,7 @@ from PIL import Image
 from streamlit_image_coordinates import streamlit_image_coordinates
 
 st.set_page_config(
-    page_title="열화상 타일 정밀 충진율 분석 시스템",
+    page_title="열화상 타일 정밀 충진율 분석 시스템 (자동 냉각 판별)",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -66,35 +66,19 @@ if "coord_key" not in st.session_state:
 st.markdown("""
     <div class="title-card">
         <h1>🔥 열화상 타일 정밀 충진율 분석 시스템</h1>
-        <p>냉각 상태 보정 및 동적 HSV 민감도 분석 솔루션 (노란색: 고온 / 초록색: 식음)</p>
+        <p>자동 색상 비율 분석 기반 냉각 상태 판별 및 객관적 동적 가중치 솔루션</p>
     </div>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 📌 사이드바: 초록색(식음) 중심 민감도 옵션 설정
+# 📌 사이드바: 사진 업로드 및 자동 판별 설명
 # ---------------------------------------------------------
-st.sidebar.header("📁 이미지 및 실험 조건")
+st.sidebar.header("📁 이미지 업로드")
 uploaded_file = st.sidebar.file_uploader("열화상 사진 선택", type=["jpg", "jpeg", "png", "bmp"])
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ 냉각 상태 / 민감도 설정")
-mode = st.sidebar.radio(
-    "시편 냉각 상태 선택",
-    ["기본 (적정 냉각 - 노랑 중심)", "많이 식음 (초록색 우세)", "사용자 지정 (직접 조절)"]
-)
-
-# 노란색 = 완전 충진 (100% 반영)
-# 초록색 = 더 많이 식어가는 충진 영역 (가중치 조정)
-if mode == "기본 (적정 냉각 - 노랑 중심)":
-    green_weight = 0.4
-    green_h_min, green_h_max = 36, 85
-elif mode == "많이 식음 (초록색 우세)":
-    green_weight = 0.8  # 많이 식은 시편은 초록색도 충진재로 크게 인정 (80% 반영)
-    green_h_min, green_h_max = 30, 95  # 식어서 변한 초록색/연두색 범위를 넓혀 감지
-else:
-    green_weight = st.sidebar.slider("초록색(식은 부위) 가중치 (0.0 ~ 1.0)", 0.0, 1.0, 0.5, 0.05)
-    green_h_min = st.sidebar.slider("초록색 최소 Hue", 25, 45, 36)
-    green_h_max = st.sidebar.slider("초록색 최대 Hue", 70, 100, 85)
+st.sidebar.header("🤖 자동 냉각 상태 감지")
+st.sidebar.success("💡 **객관적 분석 적용됨**\n\n이미지 분석을 통해 노란색(고온) 대비 초록색(식음) 화소 비율을 자동 계산하여 주관적 개입 없이 최적의 가중치를 부여합니다.")
 
 if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -170,12 +154,45 @@ if uploaded_file is not None:
             # HSV 변환
             hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
             
-            # 1. 노란색 영역 (뜨거운 완전 충진 영역: 100% 충진)
+            # ---------------------------------------------------------
+            # 🤖 [1번 방안] 자동 색상 분포 분석 및 동적 파라미터 산출
+            # ---------------------------------------------------------
+            # 노란색 기본 검출 범위
             lower_yellow = np.array([18, 30, 40])
             upper_yellow = np.array([35, 255, 255])
+            mask_y_temp = cv2.inRange(hsv, lower_yellow, upper_yellow)
+            
+            # 초록색 전체 탐지 범위
+            lower_g_broad = np.array([30, 30, 40])
+            upper_g_broad = np.array([95, 255, 255])
+            mask_g_temp = cv2.inRange(hsv, lower_g_broad, upper_g_broad)
+            
+            y_temp_pixels = np.sum(mask_y_temp == 255)
+            g_temp_pixels = np.sum(mask_g_temp == 255)
+            
+            # 초록색 점유 비율 (Green Ratio) 계산
+            if (y_temp_pixels + g_temp_pixels) > 0:
+                green_ratio_in_filled = g_temp_pixels / (y_temp_pixels + g_temp_pixels)
+            else:
+                green_ratio_in_filled = 0.0
+
+            # 비율 기준에 따라 냉각 상태 모드 및 가중치 자동 판별
+            if green_ratio_in_filled >= 0.35:
+                auto_mode = "많이 식음 (초록색 우세)"
+                green_weight = 0.8  # 식은 시편은 초록색도 충진재로 크게 반영 (80%)
+                green_h_min, green_h_max = 30, 95
+            else:
+                auto_mode = "적정 냉각 (노란색 우세)"
+                green_weight = 0.4  # 적정 온도는 노란색 중심 반영 (40%)
+                green_h_min, green_h_max = 36, 85
+
+            # ---------------------------------------------------------
+            # 📌 확정된 자동 파라미터로 최종 분석 수행
+            # ---------------------------------------------------------
+            # 1. 노란색 영역 (100% 반영)
             mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
             
-            # 2. 초록색 영역 (더 많이 식은 충진 영역: 설정된 가중치 적용)
+            # 2. 초록색 영역 (자동 설정된 범주 및 가중치 적용)
             lower_green = np.array([green_h_min, 30, 40])
             upper_green = np.array([green_h_max, 255, 255])
             mask_green = cv2.inRange(hsv, lower_green, upper_green)
@@ -198,7 +215,7 @@ if uploaded_file is not None:
             yellow_pct = (yellow_pixels / total_pixels) * 100.0
             green_pct = (green_pixels / total_pixels) * 100.0
             
-            # 최종 계산: 노란색(뜨거움) 100% + 초록색(식음) * 선택된 가중치
+            # 최종 가중 충진율 계산
             final_ratio = yellow_pct + (green_pct * green_weight)
 
             with col2:
@@ -211,7 +228,10 @@ if uploaded_file is not None:
 
             st.markdown("<br>", unsafe_allow_html=True)
             
-            st.info(f"🟡 고온 충진(노랑): **{yellow_pct:.2f}%** | 🟢 식은 충진(초록): **{green_pct:.2f}%** (적용 가중치: {int(green_weight*100)}%)")
+            st.info(
+                f"🤖 **[자동 판별 상태]:** `{auto_mode}` (초록 화소 비중: `{green_ratio_in_filled*100:.1f}%`)\n\n"
+                f"🟡 고온 충진(노랑): **{yellow_pct:.2f}%** | 🟢 식은 충진(초록): **{green_pct:.2f}%** (자동 적용 가중치: {int(green_weight*100)}%)"
+            )
 
             if final_ratio >= 80.0:
                 st.success(f"🎉 **[기준 80% 만족 (합격)]** 최종 가중 충진율: **{final_ratio:.2f}%**")
@@ -222,7 +242,8 @@ if uploaded_file is not None:
             new_record = {
                 "사진 이름": uploaded_file.name,
                 "시간": now.strftime("%H:%M:%S"),
-                "냉각 모드": mode,
+                "자동 판별 모드": auto_mode,
+                "초록 비율": f"{green_ratio_in_filled*100:.1f}%",
                 "고온 충진(노랑)": f"{yellow_pct:.2f}%",
                 "식은 충진(초록)": f"{green_pct:.2f}%",
                 "최종 충진율": f"{final_ratio:.2f}%"
