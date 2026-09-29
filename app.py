@@ -67,7 +67,7 @@ if "coord_key" not in st.session_state:
 st.markdown("""
     <div class="title-card">
         <h1>🔥 열화상 타일 정밀 충진율 분석 시스템</h1>
-        <p>열화상 HSV 채널 가중 분석(초록 100%, 노랑 40%) 및 충진율 진단 솔루션</p>
+        <p>열화상 HSV 채널 가중 분석(초록 100%, 노랑 40%) 및 노이즈 필터링 진단 솔루션</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -81,14 +81,11 @@ if uploaded_file is not None:
     if full_img is None:
         st.error("❌ 이미지를 불러올 수 없습니다.")
     else:
-        # 📌 1. 원본 이미지 변형/자르기 없이 원본 그대로 사용
         orig_img = full_img
         img_h, img_w = orig_img.shape[:2]
         
         st.markdown('<div class="sub-instruction">📌 <b>RGB 타일 영역 4개 모서리 클릭:</b> 1.좌상 ➔ 2.우상 ➔ 3.우하 ➔ 4.좌하</div>', unsafe_allow_html=True)
         
-        # 📌 2. 어떤 사진이든 짤리지 않도록 비율에 따른 스마트 리사이즈 계산
-        # 최대 너비 400px 제한으로 화면 컬럼 밖으로 넘어가는 현상 방지
         MAX_W = 400
         if img_w > MAX_W:
             canvas_w = MAX_W
@@ -148,16 +145,22 @@ if uploaded_file is not None:
             warped_img = cv2.warpPerspective(orig_img, matrix, (TARGET_W, TARGET_H))
             warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
             
-            # 가중치 방식 색상 영역 추출 (초록 1.0, 노랑 0.4)
+            # 📌 1. HSV 색상 변환
             hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
             
-            lower_green = np.array([36, 40, 40])
+            # 촬영자 열 간섭 및 노이즈 방지를 위해 최소 S(채도), V(명도) 하한선 적용
+            lower_green = np.array([36, 50, 50])
             upper_green = np.array([85, 255, 255])
             mask_green = cv2.inRange(hsv, lower_green, upper_green)
             
-            lower_yellow = np.array([24, 40, 40])
+            lower_yellow = np.array([24, 50, 50])
             upper_yellow = np.array([35, 255, 255])
             mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+            # 📌 2. 카메라 미세 노이즈 제거 (모르포지 노이즈 필터링 연산)
+            kernel = np.ones((3, 3), np.uint8)
+            mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_OPEN, kernel)
+            mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_OPEN, kernel)
             
             display_mask = np.zeros((TARGET_H, TARGET_W), dtype=np.uint8)
             display_mask[mask_green == 255] = 255
@@ -168,8 +171,11 @@ if uploaded_file is not None:
             yellow_pixels = np.sum(mask_yellow == 255)
             total_pixels = TARGET_W * TARGET_H
 
-            weighted_filled_pixels = (green_pixels * 1.0) + (yellow_pixels * 0.4)
-            final_ratio = (weighted_filled_pixels / total_pixels) * 100.0
+            # 📌 3. 퍼센트 계산 및 가중 충진율 산출 (초록 + 노랑*0.4)
+            green_pct = (green_pixels / total_pixels) * 100.0
+            yellow_pct = (yellow_pixels / total_pixels) * 100.0
+            
+            final_ratio = green_pct + (yellow_pct * 0.4)
 
             with col2:
                 st.markdown("##### 2. 정면 보정")
@@ -181,21 +187,20 @@ if uploaded_file is not None:
 
             st.markdown("<br>", unsafe_allow_html=True)
             
-            green_pct = (green_pixels / total_pixels) * 100
-            yellow_pct = (yellow_pixels / total_pixels) * 100
+            # 📌 결과 출력 부분 업데이트
             st.info(f"🟢 완전 충진(초록): **{green_pct:.2f}%** | 🟡 일부 충진(노랑): **{yellow_pct:.2f}%** (가중치 40% 적용)")
 
             if final_ratio >= 80.0:
-                st.success(f"🎉 **[기준 80% 만족 (합격)]** 최종 가중 충진율: **{final_ratio:.2f}%**")
+                st.success(f"🎉 **[기준 80% 만족 (합격)]** 최종 가중 충진율: **{final_ratio:.2f}%** (초록 {green_pct:.2f}% + 노랑 가중치 {yellow_pct*0.4:.2f}%)")
             else:
-                st.error(f"🚨 **[기준 80% 미달 (불합격)]** 최종 가중 충진율: **{final_ratio:.2f}%**")
+                st.error(f"🚨 **[기준 80% 미달 (불합격)]** 최종 가중 충진율: **{final_ratio:.2f}%** (초록 {green_pct:.2f}% + 노랑 가중치 {yellow_pct*0.4:.2f}%)")
 
             now = datetime.now()
             new_record = {
                 "사진 이름": uploaded_file.name,
                 "시간": now.strftime("%H:%M:%S"),
-                "완전 충진(초록)": f"{green_pct:.1f}%",
-                "일부 충진(노랑)": f"{yellow_pct:.1f}%",
+                "완전 충진(초록)": f"{green_pct:.2f}%",
+                "일부 충진(노랑)": f"{yellow_pct:.2f}%",
                 "최종 충진율": f"{final_ratio:.2f}%"
             }
             
