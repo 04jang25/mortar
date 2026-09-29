@@ -4,175 +4,236 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 from PIL import Image
-from streamlit_drawable_canvas import st_canvas
+from streamlit_image_coordinates import streamlit_image_coordinates
 
+# 페이지 레이아웃 및 브라우저 탭 설정
 st.set_page_config(
-    page_title="LH 열화상 타일 정밀 충진율 분석 시스템",
+    page_title="열화상 타일 정밀 충진율 분석 시스템",
     layout="wide",
-    initial_sidebar_state="collapsed" # 모바일 화면 확보를 위해 사이드바 기본 접음
+    initial_sidebar_state="expanded"
 )
+
+# 커스텀 CSS 스타일링
+st.markdown("""
+    <style>
+        html, body, [class*="css"] { font-size: 1.2rem !important; }
+        .stApp { background-color: #f8fafc; color: #0f172a; }
+        .block-container { padding-top: 1.5rem !important; padding-bottom: 2rem !important; }
+        .title-card {
+            background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+            padding: 1.5rem 2rem;
+            border-radius: 14px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
+            margin-bottom: 1.5rem;
+        }
+        .title-card h1 { color: #ffffff !important; font-size: 2.2rem !important; font-weight: 800 !important; margin: 0 !important; }
+        .title-card p { color: #dbeafe !important; font-size: 1.15rem !important; margin-top: 0.5rem !important; }
+        .sub-instruction {
+            background-color: #ffffff;
+            padding: 1rem 1.2rem;
+            border-radius: 10px;
+            border-left: 6px solid #2563eb;
+            font-weight: 700;
+            color: #1e293b;
+            font-size: 1.3rem !important;
+            margin-bottom: 1.2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .stButton>button {
+            font-size: 1.2rem !important;
+            font-weight: 700 !important;
+            padding: 0.7rem 1.5rem !important;
+            border-radius: 8px !important;
+        }
+        h5 {
+            font-size: 1.4rem !important;
+            font-weight: 700 !important;
+            color: #1e293b !important;
+            margin-bottom: 0.8rem !important;
+        }
+        h3, .stSubheader { font-size: 1.6rem !important; font-weight: 800 !important; }
+        [data-testid="stSidebar"] { background-color: #ffffff !important; border-right: 1px solid #e2e8f0 !important; }
+        [data-testid="column"] { background: #ffffff; padding: 1.2rem; border-radius: 12px; border: 1px solid #cbd5e1; }
+    </style>
+""", unsafe_allow_html=True)
 
 if "history" not in st.session_state:
     st.session_state.history = []
+if "pts" not in st.session_state:
+    st.session_state.pts = []
+if "coord_key" not in st.session_state:
+    st.session_state.coord_key = 0
 
-st.title("🔥 LH 기준 열화상 타일 정밀 충진율 분석 시스템 v1.0")
-st.markdown("---")
+st.markdown("""
+    <div class="title-card">
+        <h1>🔥 열화상 타일 정밀 충진율 분석 시스템</h1>
+        <p>열화상 정밀 이진화 채널 분석 및 충진율 진단 솔루션</p>
+    </div>
+""", unsafe_allow_html=True)
 
 st.sidebar.header("📁 이미지 파일 선택")
-uploaded_file = st.sidebar.file_uploader("열화상 사진을 선택하세요", type=["jpg", "jpeg", "png", "bmp"])
+uploaded_file = st.sidebar.file_uploader("열화상 사진 선택", type=["jpg", "jpeg", "png", "bmp"])
 
 if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    orig_img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    full_img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
     
-    if orig_img is None:
+    if full_img is None:
         st.error("❌ 이미지를 불러올 수 없습니다.")
     else:
+        full_h, full_w = full_img.shape[:2]
+        if full_h > full_w:
+            orig_img = full_img[0:int(full_h * 0.33), :]
+        else:
+            orig_img = full_img
+            
         img_h, img_w = orig_img.shape[:2]
         
-        # 모바일 환경 대응: 모바일 화면 폭에 맞춘 가상 캔버스 크기
-        canvas_w = 340
-        canvas_h = int(img_h * (canvas_w / img_w))
+        col_main, col_history = st.columns([8, 4])
         
-        bg_img_rgb = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(bg_img_rgb)
-        
-        st.subheader("📌 [1단계] 이미지에서 모서리 4곳을 터치(클릭)하세요")
-        st.info("순서: 1.좌상(TL) ➔ 2.우상(TR) ➔ 3.우하(BR) ➔ 4.좌하(BL)")
-        
-        # 캔버스 배치
-        canvas_result = st_canvas(
-            fill_color="rgba(239, 68, 68, 0.8)",
-            stroke_width=3,
-            stroke_color="#ef4444",
-            background_image=pil_image,
-            update_streamlit=True,
-            height=canvas_h,
-            width=canvas_w,
-            drawing_mode="point",
-            point_display_radius=10, # 모바일 터치 인식을 위해 손가락 크기에 맞춰 점 크기 확대
-            display_toolbar=False,
-            key="canvas_tile_mobile",
-        )
+        with col_main:
+            st.markdown('<div class="sub-instruction">📌 <b>RGB 타일 영역 4개 모서리 클릭:</b> 1.좌상 ➔ 2.우상 ➔ 3.우하 ➔ 4.좌하</div>', unsafe_allow_html=True)
+            
+            canvas_w = 360
+            canvas_h = int(img_h * (canvas_w / img_w))
+            
+            bg_img_rgb = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(bg_img_rgb).resize((canvas_w, canvas_h))
+            
+            draw_img = np.array(pil_image).copy()
+            for i, p in enumerate(st.session_state.pts):
+                cv2.circle(draw_img, (p[0], p[1]), 7, (255, 255, 255), -1)
+                cv2.circle(draw_img, (p[0], p[1]), 5, (239, 68, 68), -1)
+                cv2.putText(draw_img, str(i+1), (p[0]+10, p[1]+5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+                cv2.putText(draw_img, str(i+1), (p[0]+10, p[1]+5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
-        # 클릭/터치 좌표 수집
-        clicked_pts = []
-        if canvas_result.json_data is not None and "objects" in canvas_result.json_data:
-            for obj in canvas_result.json_data["objects"]:
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown("##### 1. RGB 타일 (영역 지정)")
+                value = streamlit_image_coordinates(
+                    Image.fromarray(draw_img),
+                    key=f"mobile_coord_{st.session_state.coord_key}"
+                )
+
+                if value is not None:
+                    point = [value["x"], value["y"]]
+                    if len(st.session_state.pts) < 4 and point not in st.session_state.pts:
+                        st.session_state.pts.append(point)
+                        st.rerun()
+
+            col_btn1, col_btn2 = st.columns([1, 1])
+            with col_btn1:
+                st.write(f"📍 좌표 선택: **{len(st.session_state.pts)} / 4**")
+                if st.button("🔄 리셋", use_container_width=True):
+                    st.session_state.pts = []
+                    st.session_state.coord_key += 1
+                    st.rerun()
+                    
+            with col_btn2:
+                run_btn = st.button("🚀 분석 실행", disabled=(len(st.session_state.pts) != 4), type="primary", use_container_width=True)
+
+            if run_btn and len(st.session_state.pts) == 4:
+                clicked_pts = []
                 x_scale = img_w / canvas_w
                 y_scale = img_h / canvas_h
-                orig_x = int(obj["left"] * x_scale)
-                orig_y = int(obj["top"] * y_scale)
-                clicked_pts.append([orig_x, orig_y])
+                for pt in st.session_state.pts:
+                    clicked_pts.append([int(pt[0] * x_scale), int(pt[1] * y_scale)])
 
-        st.caption(f"📍 현재 선택된 모서리 좌표 수: **{len(clicked_pts)} / 4 개**")
+                src_pts = np.float32(clicked_pts)
+                TARGET_W, TARGET_H = 600, 300
+                dst_pts = np.float32([[0, 0], [TARGET_W, 0], [TARGET_W, TARGET_H], [0, TARGET_H]])
+                
+                matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
+                warped_img = cv2.warpPerspective(orig_img, matrix, (TARGET_W, TARGET_H))
+                warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
+                
+                # =========================================================
+                # 📌 [고온 영역(노랑/주황/빨강) 정밀 고정 추출 알고리즘]
+                # =========================================================
+                # 1. LAB 색상 공간으로 변환 (A 채널: 초록↔빨강, L 채널: 밝기)
+                lab = cv2.cvtColor(warped_img, cv2.COLOR_BGR2LAB)
+                l_chan, a_chan, b_chan = cv2.split(lab)
+                
+                # 2. HSV 색상 공간에서 붉은색/주황색/노란색 영역 마스킹
+                hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
+                
+                # 주황/노랑/빨강 (Hue: 0 ~ 30, Saturation > 70, Value > 120)
+                lower_warm1 = np.array([0, 70, 120])
+                upper_warm1 = np.array([30, 255, 255])
+                
+                # 진한 빨강 (Hue: 160 ~ 180, Saturation > 70, Value > 120)
+                lower_warm2 = np.array([160, 70, 120])
+                upper_warm2 = np.array([180, 255, 255])
+                
+                mask_hsv1 = cv2.inRange(hsv, lower_warm1, upper_warm1)
+                mask_hsv2 = cv2.inRange(hsv, lower_warm2, upper_warm2)
+                mask_hsv = cv2.bitwise_or(mask_hsv1, mask_hsv2)
+                
+                # 3. LAB A-채널(붉은색 성분 강도 > 135) 조건과 결합하여 배경(초록) 완벽 제외
+                _, mask_lab_a = cv2.threshold(a_chan, 135, 255, cv2.THRESH_BINARY)
+                
+                # 충진 영역(고온 부위) = HSV 고온 마스크 AND LAB 붉은색 마스크
+                mask_filled = cv2.bitwise_and(mask_hsv, mask_lab_a)
+                
+                # 4. 노이즈 제거 (Morphology Opening)
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+                mask_filled = cv2.morphologyEx(mask_filled, cv2.MORPH_OPEN, kernel)
+                
+                total_pixels = TARGET_W * TARGET_H
+                filled_pixels = np.count_nonzero(mask_filled == 255)
+                final_ratio = (filled_pixels / total_pixels) * 100.0
 
-        # 4개 선택 완료 시 버튼 활성화
-        run_btn = st.button("🚀 충진율 정밀 분석 실행", disabled=(len(clicked_pts) != 4), use_container_width=True)
-        
-        if len(clicked_pts) != 4:
-            st.warning("⚠️ 모서리 4곳을 터치해야 분석 버튼이 활성화됩니다. (초과 선택 시 페이지를 새로고침 해주세요)")
+                display_mask = cv2.cvtColor(mask_filled, cv2.COLOR_GRAY2BGR)
 
-        # 분석 실행
-        if run_btn and len(clicked_pts) == 4:
-            src_pts = np.float32(clicked_pts)
-            TARGET_W, TARGET_H = 600, 300
-            dst_pts = np.float32([[0, 0], [TARGET_W, 0], [TARGET_W, TARGET_H], [0, TARGET_H]])
-            
-            matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
-            warped_img = cv2.warpPerspective(orig_img, matrix, (TARGET_W, TARGET_H))
-            
-            blurred = cv2.GaussianBlur(warped_img, (5, 5), 0)
-            hsv_warped = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
-            
-            lower_red1 = np.array([0, 50, 50])
-            upper_red1 = np.array([10, 255, 255])
-            lower_red2 = np.array([145, 50, 50])
-            upper_red2 = np.array([180, 255, 255])
-            mask_red = cv2.inRange(hsv_warped, lower_red1, upper_red1) | cv2.inRange(hsv_warped, lower_red2, upper_red2)
-            
-            lower_white = np.array([0, 0, 200])
-            upper_white = np.array([180, 80, 255])
-            mask_white = cv2.inRange(hsv_warped, lower_white, upper_white)
-            
-            mask_full = cv2.bitwise_or(mask_red, mask_white)
-            
-            lower_yellow = np.array([11, 50, 100])
-            upper_yellow = np.array([35, 255, 255])
-            mask_partial = cv2.inRange(hsv_warped, lower_yellow, upper_yellow)
-            
-            kernel = np.ones((5, 5), np.uint8)
-            mask_full = cv2.morphologyEx(mask_full, cv2.MORPH_CLOSE, kernel)
-            mask_partial = cv2.morphologyEx(mask_partial, cv2.MORPH_CLOSE, kernel)
-            
-            total_pixels = TARGET_W * TARGET_H
-            full_pixels = np.sum(mask_full == 255)
-            partial_pixels = np.sum(mask_partial == 255)
-            
-            WEIGHT_FULL = 1.0
-            WEIGHT_PARTIAL = 0.45
-            weighted_filled_pixels = (full_pixels * WEIGHT_FULL) + (partial_pixels * WEIGHT_PARTIAL)
-            final_ratio = (weighted_filled_pixels / total_pixels) * 100
-            
-            display_mask = np.ones_like(warped_img) * 255
-            display_mask[mask_partial == 255] = [0, 255, 255]
-            display_mask[mask_full == 255] = [0, 0, 255]
-            
-            col_res1, col_res2 = st.columns(2)
-            with col_res1:
-                st.markdown("**2. 투시 보정 정면 타일**")
-                st.image(cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB), use_container_width=True)
-            
-            with col_res2:
-                st.markdown("**3. 충진 진단 분석 마스크**")
-                st.image(cv2.cvtColor(display_mask, cv2.COLOR_BGR2RGB), use_container_width=True)
+                with col2:
+                    st.markdown("##### 2. 정면 보정")
+                    st.image(warped_rgb, use_container_width=True)
+                
+                with col3:
+                    st.markdown("##### 3. 진단 마스크 (BW)")
+                    st.image(display_mask, use_container_width=True)
 
-            st.markdown("---")
-            
-            if final_ratio >= 80.0:
-                st.success(f"🎉 **[LH 시방 기준 만족 (합격)]** 최종 산출 충진율: **{final_ratio:.2f}%**")
-                st.caption("• LH 표준 시방 요구조건(충진율 80% 이상)을 충족합니다. 별도의 보강 조치가 필요하지 않습니다.")
+                st.markdown("<br>", unsafe_allow_html=True)
+                if final_ratio >= 80.0:
+                    st.success(f"🎉 **[기준 80% 만족 (합격)]** 최종 충진율: **{final_ratio:.2f}%**")
+                else:
+                    st.error(f"🚨 **[기준 80% 미달 (불합격)]** 최종 충진율: **{final_ratio:.2f}%**")
+
+                now = datetime.now()
+                new_record = {
+                    "사진 이름": uploaded_file.name,
+                    "시간": now.strftime("%H:%M:%S"),
+                    "충진율": f"{final_ratio:.2f}%"
+                }
+                
+                if not st.session_state.history or st.session_state.history[0]["시간"] != new_record["시간"]:
+                    st.session_state.history.insert(0, new_record)
+
             else:
-                st.error(f"🚨 **[LH 시방 기준 미달 (불합격)]** 최종 산출 충진율: **{final_ratio:.2f}%**")
-                st.markdown("""
-                ### ⚠️ LH 미달시 단계별 현장 조치 지침
-                1. **공사 중 (시공 진행 단계):**
-                   - 미충진 부위 타일 **즉시 철거 후 전면 재시공** 실시
-                   - 바탕면 이물질 제거 및 **개량압착공법(타일 뒷면+바탕면 양면 도포)** 적용
-                2. **공사 완료 후 (완공/검수 단계):**
-                   - 줄눈 타공 후 **에폭시/주입용 에폭시 수지 고압 주입 보강공법** 적용
-                """)
+                with col2:
+                    st.markdown("##### 2. 정면 보정")
+                    st.info("4곳 터치 후 분석 버튼 클릭")
+                with col3:
+                    st.markdown("##### 3. 진단 마스크")
+                    st.info("분석 대기 중")
 
-            now = datetime.now()
-            new_record = {
-                "사진 이름": uploaded_file.name,
-                "날짜": now.strftime("%Y-%m-%d"),
-                "시간": now.strftime("%H:%M:%S"),
-                "충진율(%)": f"{final_ratio:.2f}%"
-            }
-            
-            if not st.session_state.history or st.session_state.history[0]["사진 이름"] != uploaded_file.name:
-                st.session_state.history.insert(0, new_record)
-
-        st.markdown("---")
-        st.subheader("📋 누적 분석 이력 목록")
-        if st.session_state.history:
-            df = pd.DataFrame(st.session_state.history)
-            st.dataframe(df, use_container_width=True)
-            
-            csv_data = df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="💾 CSV 내보내기",
-                data=csv_data,
-                file_name="tile_analysis_history.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-            if st.button("🧹 이력 초기화", use_container_width=True):
-                st.session_state.history = []
-                st.rerun()
-        else:
-            st.write("아직 기록된 분석 이력이 없습니다.")
+        with col_history:
+            st.subheader("📋 분석 이력")
+            if st.session_state.history:
+                df = pd.DataFrame(st.session_state.history)
+                st.dataframe(df, use_container_width=True)
+                
+                csv_data = df.to_csv(index=False).encode('utf-8-sig')
+                st.download_button("💾 CSV 다운로드", data=csv_data, file_name="tile_history.csv", mime="text/csv", use_container_width=True)
+                if st.button("🧹 이력 초기화", use_container_width=True):
+                    st.session_state.history = []
+                    st.session_state.pts = []
+                    st.session_state.coord_key += 1
+                    st.rerun()
+            else:
+                st.caption("기록 없음")
 
 else:
-    st.info("👈 왼쪽 상단 메뉴(>]를 눌러 사이드바에서 열화상 사진을 업로드해 주세요.")
+    st.session_state.pts = []
+    st.info("👈 사이드바에서 열화상 사진을 업로드하세요.")
