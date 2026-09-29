@@ -161,15 +161,15 @@ if uploaded_file is not None:
             hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
             
             # ---------------------------------------------------------
-            # 🎨 HSV 마스크 검출
+            # 🎨 HSV 마스크 검출 (중복 경계값 분리 적용)
             # ---------------------------------------------------------
-            # 1. 노란색 검출
+            # 1. 노란색 검출 (Hue: 18 ~ 34)
             lower_yellow = np.array([18, 30, 40])
-            upper_yellow = np.array([35, 255, 255])
+            upper_yellow = np.array([34, 255, 255])  # 34까지 설정하여 초록색과의 중복 방지
             mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
             
-            # 2. 초록색 검출
-            lower_green = np.array([30, 30, 40])
+            # 2. 초록색 검출 (Hue: 35 ~ 95)
+            lower_green = np.array([35, 30, 40])    # 35부터 시작하여 노란색과 분리
             upper_green = np.array([95, 255, 255])
             mask_green = cv2.inRange(hsv, lower_green, upper_green)
 
@@ -178,7 +178,7 @@ if uploaded_file is not None:
             mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_OPEN, kernel)
             mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_OPEN, kernel)
             
-            # 피셀 수 및 면적 비율 계산
+            # 픽셀 수 및 면적 비율 계산
             yellow_pixels = np.sum(mask_yellow == 255)
             green_pixels = np.sum(mask_green == 255)
             total_pixels = TARGET_W * TARGET_H
@@ -187,19 +187,20 @@ if uploaded_file is not None:
             green_pct = (green_pixels / total_pixels) * 100.0
 
             # ---------------------------------------------------------
-            # 🤖 요청하신 우세도 판별 및 노란색 가중치 적용 로직
+            # 🤖 우세도 판별 및 가중치 적용
             # ---------------------------------------------------------
             green_weight = 1.0  # 초록색은 무조건 100% 반영
             
             if green_pixels > yellow_pixels:
                 auto_mode = "초록색 우세 (초록 > 노랑)"
-                yellow_weight = 0.4  # 초록색이 우세하면 노란색은 40%만 반영
+                yellow_weight = 0.4  # 초록색 우세 시 노란색 40%만 반영
             else:
                 auto_mode = "노란색 우세 (노랑 >= 초록)"
-                yellow_weight = 1.0  # 노란색이 우세하면 노란색도 100% 전부 반영
+                yellow_weight = 1.0  # 노란색 우세 시 노란색도 100% 전부 반영
 
-            # 최종 가중 충진율 계산
-            final_ratio = (green_pct * green_weight) + (yellow_pct * yellow_weight)
+            # 최종 가중 충진율 계산 (최대 100% 상한 설정)
+            calculated_ratio = (green_pct * green_weight) + (yellow_pct * yellow_weight)
+            final_ratio = min(calculated_ratio, 100.0)
 
             # 마스크 시각화 (노란색: 255 / 초록색: 180)
             display_mask = np.zeros((TARGET_H, TARGET_W), dtype=np.uint8)
