@@ -81,14 +81,21 @@ if uploaded_file is not None:
     if full_img is None:
         st.error("❌ 이미지를 불러올 수 없습니다.")
     else:
-        # 📌 원본 이미지 자르기 없이 그대로 사용
+        # 📌 1. 원본 이미지 변형/자르기 없이 원본 그대로 사용
         orig_img = full_img
         img_h, img_w = orig_img.shape[:2]
         
         st.markdown('<div class="sub-instruction">📌 <b>RGB 타일 영역 4개 모서리 클릭:</b> 1.좌상 ➔ 2.우상 ➔ 3.우하 ➔ 4.좌하</div>', unsafe_allow_html=True)
         
-        canvas_w = 520
-        canvas_h = int(img_h * (canvas_w / img_w))
+        # 📌 2. 어떤 사진이든 짤리지 않도록 비율에 따른 스마트 리사이즈 계산
+        # 최대 너비 400px 제한으로 화면 컬럼 밖으로 넘어가는 현상 방지
+        MAX_W = 400
+        if img_w > MAX_W:
+            canvas_w = MAX_W
+            canvas_h = int(img_h * (MAX_W / img_w))
+        else:
+            canvas_w = img_w
+            canvas_h = img_h
         
         bg_img_rgb = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(bg_img_rgb).resize((canvas_w, canvas_h))
