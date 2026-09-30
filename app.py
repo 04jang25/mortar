@@ -235,14 +235,11 @@ if uploaded_file is not None:
             now = datetime.now()
             new_record = {
                 "사진 이름": uploaded_file.name,
-                "시간": now.strftime("%H:%M:%S"),
-                "최종 충진율": f"{final_ratio:.2f}%",
-                "흰색 영역": f"{green_pct:.1f}%",
-                "회색 영역": f"{yellow_pct:.1f}%",
-                "미충진 영역": f"{red_pct:.1f}%"
+                "날짜시간": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "최종 충진율": f"{final_ratio:.2f}%"
             }
             
-            if not st.session_state.history or st.session_state.history[0]["시간"] != new_record["시간"]:
+            if not st.session_state.history or st.session_state.history[0]["날짜시간"] != new_record["날짜시간"]:
                 st.session_state.history.insert(0, new_record)
 
         else:
