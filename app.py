@@ -66,7 +66,7 @@ if "coord_key" not in st.session_state:
 st.markdown("""
     <div class="title-card">
         <h1>🔥 열화상 타일 정밀 충진율 분석 시스템</h1>
-        <p>HSV 마스크 기반 충진율 측정 모듈</p>
+        <p>HSV 색상 세분화 기반 충진율 측정 모듈 (초록: 100%, 노랑: 60%, 빨강: 0%)</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -148,72 +148,89 @@ if uploaded_file is not None:
             warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
             
             # ---------------------------------------------------------
-            # 🛠️ 이미지 전처리 (가우시안 블러 노이즈 보정만 적용)
+            # 🛠️ 이미지 전처리 (가우시안 블러 노이즈 보정)
             # ---------------------------------------------------------
             blurred_img = cv2.GaussianBlur(warped_img, (5, 5), 0)
-
-            # 원본 색상을 그대로 유지하기 위해 CLAHE 제외 후 바로 HSV 변환
             hsv = cv2.cvtColor(blurred_img, cv2.COLOR_BGR2HSV)
             
             # ---------------------------------------------------------
-            # 🎨 HSV 마스크 검출
+            # 🎨 HSV 마스크 검출 (초록: 100%, 노랑: 60%, 빨강: 0%)
             # ---------------------------------------------------------
-            lower_yellow = np.array([15, 15, 20])
-            upper_yellow = np.array([34, 255, 255])
-            mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
-            
-            lower_green = np.array([35, 15, 20])
-            upper_green = np.array([95, 255, 255])
+            # 1. 초록색 (완전 충진)
+            lower_green = np.array([35, 40, 40])
+            upper_green = np.array([85, 255, 255])
             mask_green = cv2.inRange(hsv, lower_green, upper_green)
 
+            # 2. 노란색 (60% 충진)
+            lower_yellow = np.array([15, 40, 40])
+            upper_yellow = np.array([34, 255, 255])
+            mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+            # 3. 빨간색 (미충진: 0% 반영) - HSV상 0 부근 및 180 부근 분할 추출 후 결합
+            lower_red1 = np.array([0, 40, 40])
+            upper_red1 = np.array([14, 255, 255])
+            lower_red2 = np.array([170, 40, 40])
+            upper_red2 = np.array([180, 255, 255])
+            mask_red1 = cv2.inRange(hsv, lower_red1, upper_red1)
+            mask_red2 = cv2.inRange(hsv, lower_red2, upper_red2)
+            mask_red = cv2.bitwise_or(mask_red1, mask_red2)
+
+            # 노이즈 제거 (모폴로지 닫기 연산)
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-            mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_CLOSE, kernel)
             mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_CLOSE, kernel)
+            mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_CLOSE, kernel)
+            mask_red = cv2.morphologyEx(mask_red, cv2.MORPH_CLOSE, kernel)
             
-            yellow_pixels = np.sum(mask_yellow == 255)
-            green_pixels = np.sum(mask_green == 255)
+            # ---------------------------------------------------------
+            # 📊 픽셀 카운트 및 충진율 산출
+            # ---------------------------------------------------------
             total_pixels = TARGET_W * TARGET_H
+            green_pixels = np.sum(mask_green == 255)
+            yellow_pixels = np.sum(mask_yellow == 255)
+            red_pixels = np.sum(mask_red == 255)
 
-            yellow_pct = (yellow_pixels / total_pixels) * 100.0
             green_pct = (green_pixels / total_pixels) * 100.0
+            yellow_pct = (yellow_pixels / total_pixels) * 100.0
+            red_pct = (red_pixels / total_pixels) * 100.0
 
-            green_weight = 1.0
-            if green_pixels > yellow_pixels:
-                auto_mode = "초록색 우세 (초록 > 노랑)"
-                yellow_weight = 0.4
-            else:
-                auto_mode = "노란색 우세 (노랑 >= 초록)"
-                yellow_weight = 1.0
-
-            calculated_ratio = (green_pct * green_weight) + (yellow_pct * yellow_weight)
+            # 초록 100%, 노랑 60%, 빨강 0% 적용
+            calculated_ratio = (green_pct * 1.0) + (yellow_pct * 0.6)
             final_ratio = min(calculated_ratio, 100.0)
 
-            display_mask = np.zeros((TARGET_H, TARGET_W), dtype=np.uint8)
-            display_mask[mask_yellow == 255] = 255
-            display_mask[mask_green == 255] = 180
-            display_mask_bgr = cv2.cvtColor(display_mask, cv2.COLOR_GRAY2BGR)
+            # ---------------------------------------------------------
+            # 🖼️ 진단 마스크 시각화 (컬러 패치 생성)
+            # ---------------------------------------------------------
+            display_mask = np.zeros((TARGET_H, TARGET_W, 3), dtype=np.uint8)
+            display_mask[mask_red == 255] = [255, 0, 0]      # 빨강 (미충진)
+            display_mask[mask_yellow == 255] = [255, 255, 0]  # 노랑 (60% 충진)
+            display_mask[mask_green == 255] = [0, 255, 0]    # 초록 (100% 충진)
 
             with col2:
                 st.markdown("##### 2. 정면 보정")
                 st.image(warped_rgb, use_container_width=True)
             
             with col3:
-                st.markdown("##### 3. 진단 마스크 (BW)")
-                st.image(display_mask_bgr, use_container_width=True)
+                st.markdown("##### 3. 진단 마스크")
+                st.image(display_mask, use_container_width=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # 부가적인 설명 없이 최종 충진율만 출력
+            # 최종 충진율 및 구체적 색상별 비율 출력
             if final_ratio >= 80.0:
                 st.success(f"🎉 **[기준 80% 만족 (합격)]** 최종 충진율: **{final_ratio:.2f}%**")
             else:
                 st.error(f"🚨 **[기준 80% 미달 (불합격)]** 최종 충진율: **{final_ratio:.2f}%**")
 
+            st.caption(f"💡 세부 영역 분포 — 초록(100% 반영): **{green_pct:.1f}%** | 노랑(60% 반영): **{yellow_pct:.1f}%** | 빨강(0% 반영): **{red_pct:.1f}%**")
+
             now = datetime.now()
             new_record = {
                 "사진 이름": uploaded_file.name,
                 "시간": now.strftime("%H:%M:%S"),
-                "최종 충진율": f"{final_ratio:.2f}%"
+                "최종 충진율": f"{final_ratio:.2f}%",
+                "초록 비율": f"{green_pct:.1f}%",
+                "노랑 비율": f"{yellow_pct:.1f}%",
+                "빨강 비율": f"{red_pct:.1f}%"
             }
             
             if not st.session_state.history or st.session_state.history[0]["시간"] != new_record["시간"]:
