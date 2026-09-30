@@ -182,7 +182,7 @@ if uploaded_file is not None:
             mask_red = cv2.morphologyEx(mask_red, cv2.MORPH_CLOSE, kernel)
             
             # ---------------------------------------------------------
-            # 📊 보정된 충진율 산출 알고리즘 (목표 86% 부근 보정)
+            # 📊 보정된 충진율 산출 알고리즘 (비례 보정 방식)
             # ---------------------------------------------------------
             total_pixels = TARGET_W * TARGET_H
             green_pixels = np.sum(mask_green == 255)
@@ -193,29 +193,30 @@ if uploaded_file is not None:
             yellow_pct = (yellow_pixels / total_pixels) * 100.0
             red_pct = (red_pixels / total_pixels) * 100.0
 
-            # 💡 [보정 로직]: 72.32% ➔ 86% 부근 산출을 위한 노란색 가중치 상향 및 오프셋 보정
+            # 1. 노랑/초록 분포 패턴에 따른 기본 충진율 산출
             if yellow_pixels >= green_pixels:
                 yellow_weight = 1.0  # 노란색 우세 시 100% 반영
                 base_calc = (green_pct * 1.0) + (yellow_pct * yellow_weight)
                 mode_desc = "노란색 우세 패턴 (노랑+초록 영역 완전 충진 판단)"
             else:
-                yellow_weight = 0.85  # 초록색 우세 시 노란색 가중치를 0.85로 높임
+                yellow_weight = 0.85  # 초록색 우세 시 노란색 85% 반영
                 base_calc = (green_pct * 1.0) + (yellow_pct * yellow_weight)
                 mode_desc = "초록색 우세 패턴 (초록 100%, 노랑 85% 보정 적용)"
 
-            # 실측 오차 보정 계수 (+13.68% 수준의 오프셋 보정 반영)
-            OFFSET_CORRECTION = 13.68
-            calculated_ratio = base_calc + OFFSET_CORRECTION
+            # 2. 비례 보정 계수 적용 (SCALE_FACTOR)
+            # 72.32% 기준 이미지 ➔ 약 86% 산출, 94% 등 높은 이미지 ➔ 과도하게 100%로 막히는 현상 방지
+            SCALE_FACTOR = 1.189
+            calculated_ratio = base_calc * SCALE_FACTOR
             final_ratio = min(calculated_ratio, 100.0)
 
             # ---------------------------------------------------------
             # 🖼️ 무채색(Grayscale) 진단 마스크 시각화
             # ---------------------------------------------------------
-            # 바탕(공복/미충진): 어두운 회색(40), 노란색 영역: 중간 회색(180), 초록색 영역: 흰색(255)
+            # 바탕(공복/미충진): 어두운 회색(15), 노란색 영역: 중간 회색(180), 초록색 영역: 흰색(255)
             display_mask = np.full((TARGET_H, TARGET_W, 3), 40, dtype=np.uint8)
-            display_mask[mask_yellow == 255] = [180, 180, 180]  # 충진(노란색)
-            display_mask[mask_green == 255] = [255, 255, 255]   # 완전 충진(초록색)
-            display_mask[mask_red == 255] = [15, 15, 15]        # 미충진(공복 영역)
+            display_mask[mask_yellow == 255] = [180, 180, 180]  # 일반 충진(회색)
+            display_mask[mask_green == 255] = [255, 255, 255]   # 완전 충진(흰색)
+            display_mask[mask_red == 255] = [15, 15, 15]        # 미충진/공복(어두움)
 
             with col2:
                 st.markdown("##### 2. 정면 보정")
@@ -233,7 +234,7 @@ if uploaded_file is not None:
             else:
                 st.error(f"🚨 **[기준 80% 미달 (불합격)]** 최종 충진율: **{final_ratio:.2f}%**")
 
-            st.caption(f"⚙️️ **분석 모드:** {mode_desc}")
+            st.caption(f"⚙️ **분석 모드:** {mode_desc} (비례 보정율 1.189x 반영)")
             st.caption(f"💡 **구역별 분포:** 완전 충진 영역(흰색): **{green_pct:.1f}%** | 일반 충진 영역(회색): **{yellow_pct:.1f}%** | 미충진/공복(어두움): **{red_pct:.1f}%**")
 
             now = datetime.now()
