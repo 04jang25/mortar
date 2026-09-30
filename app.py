@@ -161,7 +161,7 @@ if uploaded_file is not None:
             upper_green = np.array([85, 255, 255])
             mask_green = cv2.inRange(hsv, lower_green, upper_green)
 
-            # 2. 노란색 (가중치 미세 조정 영역)
+            # 2. 노란색 (동적 가중치 적용 영역)
             lower_yellow = np.array([15, 30, 30])
             upper_yellow = np.array([34, 255, 255])
             mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
@@ -182,7 +182,7 @@ if uploaded_file is not None:
             mask_red = cv2.morphologyEx(mask_red, cv2.MORPH_CLOSE, kernel)
             
             # ---------------------------------------------------------
-            # 📊 보정된 충진율 산출 알고리즘 (가중치 미세 조정 방식)
+            # 📊 보정된 충진율 산출 알고리즘 (비례 보정 방식)
             # ---------------------------------------------------------
             total_pixels = TARGET_W * TARGET_H
             green_pixels = np.sum(mask_green == 255)
@@ -193,20 +193,26 @@ if uploaded_file is not None:
             yellow_pct = (yellow_pixels / total_pixels) * 100.0
             red_pct = (red_pixels / total_pixels) * 100.0
 
-            # 💡 노란색 영역 충진 반영 비율(가중치) 미세 조정
+            # 1. 노랑/초록 분포 패턴에 따른 기본 충진율 산출
             if yellow_pixels >= green_pixels:
-                yellow_weight = 1.0  # 노란색 우세 패턴: 노란색 영역을 100% 충진으로 간주
-                mode_desc = "노란색 우세 패턴 (노란색 영역 100% 충진 반영)"
+                yellow_weight = 1.0  # 노란색 우세 시 100% 반영
+                base_calc = (green_pct * 1.0) + (yellow_pct * yellow_weight)
+                mode_desc = "노란색 우세 패턴 (노랑+초록 영역 완전 충진 판단)"
             else:
-                yellow_weight = 0.65 # 초록색 우세 패턴: 노란색 영역을 65%만 반영하여 과도한 비율 상승 방지
-                mode_desc = "초록색 우세 패턴 (초록 100%, 노랑 65% 반영)"
+                yellow_weight = 0.85  # 초록색 우세 시 노란색 85% 반영
+                base_calc = (green_pct * 1.0) + (yellow_pct * yellow_weight)
+                mode_desc = "초록색 우세 패턴 (초록 100%, 노랑 85% 보정 적용)"
 
-            calculated_ratio = (green_pct * 1.0) + (yellow_pct * yellow_weight)
+            # 2. 비례 보정 계수 적용 (SCALE_FACTOR)
+            # 72.32% 기준 이미지 ➔ 약 86% 산출, 94% 등 높은 이미지 ➔ 과도하게 100%로 막히는 현상 방지
+            SCALE_FACTOR = 1.189
+            calculated_ratio = base_calc * SCALE_FACTOR
             final_ratio = min(calculated_ratio, 100.0)
 
             # ---------------------------------------------------------
             # 🖼️ 무채색(Grayscale) 진단 마스크 시각화
             # ---------------------------------------------------------
+            # 바탕(공복/미충진): 어두운 회색(15), 노란색 영역: 중간 회색(180), 초록색 영역: 흰색(255)
             display_mask = np.full((TARGET_H, TARGET_W, 3), 40, dtype=np.uint8)
             display_mask[mask_yellow == 255] = [180, 180, 180]  # 일반 충진(회색)
             display_mask[mask_green == 255] = [255, 255, 255]   # 완전 충진(흰색)
@@ -228,7 +234,7 @@ if uploaded_file is not None:
             else:
                 st.error(f"🚨 **[기준 80% 미달 (불합격)]** 최종 충진율: **{final_ratio:.2f}%**")
 
-            st.caption(f"⚙️ **분석 모드:** {mode_desc}")
+            st.caption(f"⚙️ **분석 모드:** {mode_desc} (비례 보정율 1.189x 반영)")
             st.caption(f"💡 **구역별 분포:** 완전 충진 영역(흰색): **{green_pct:.1f}%** | 일반 충진 영역(회색): **{yellow_pct:.1f}%** | 미충진/공복(어두움): **{red_pct:.1f}%**")
 
             now = datetime.now()
