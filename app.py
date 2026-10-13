@@ -151,15 +151,15 @@ if uploaded_file is not None:
             hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
             
             # -------------------------------------------------------------
-            # [수정 포인트] 초록색 하한선을 32로 높여 연두/노랑 경계를 회색(부분충진)으로 유도
+            # [수정 포인트] 초록색 하한선을 18로 낮춰 연두/라임빛 영역을 초록(100% 완전충진)으로 흡수
             # -------------------------------------------------------------
-            mask_green = cv2.inRange(hsv, np.array([32, 25, 25]), np.array([95, 255, 255]))
+            mask_green = cv2.inRange(hsv, np.array([18, 20, 20]), np.array([98, 255, 255]))
 
-            # 노란색 영역 (충진율 80% 인정)
-            mask_yellow = cv2.inRange(hsv, np.array([20, 25, 25]), np.array([31, 255, 255]))
+            # 노란색 영역 (충진율 80% 인정) - 범위를 8~19로 조정
+            mask_yellow = cv2.inRange(hsv, np.array([8, 20, 20]), np.array([19, 255, 255]))
 
-            # 주황색 영역 (충진율 20% 인정)
-            mask_orange = cv2.inRange(hsv, np.array([7, 25, 25]), np.array([19, 255, 255]))
+            # 주황색 영역 (충진율 20% 인정) - 범위를 3~7로 조정
+            mask_orange = cv2.inRange(hsv, np.array([3, 20, 20]), np.array([7, 255, 255]))
 
             # 중복 제거 (초록색 영역 최우선)
             mask_yellow = cv2.bitwise_and(mask_yellow, cv2.bitwise_not(mask_green))
