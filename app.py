@@ -66,7 +66,7 @@ if "coord_key" not in st.session_state:
 st.markdown("""
     <div class="title-card">
         <h1>🔥 열화상 타일 정밀 충진율 분석 시스템</h1>
-        <p>초록(100%), 노랑(80%), 주황(20%) 가중치 최적화 분석 솔루션</p>
+        <p>열화상 카메라 편차 대응형 다중 타일 최적화 분석 솔루션</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -150,16 +150,10 @@ if uploaded_file is not None:
             # HSV 변환
             hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
             
-            # -------------------------------------------------------------
-            # [수정 포인트] 초록색 하한선을 18로 낮춰 연두/라임빛 영역을 초록(100% 완전충진)으로 흡수
-            # -------------------------------------------------------------
-            mask_green = cv2.inRange(hsv, np.array([18, 20, 20]), np.array([98, 255, 255]))
-
-            # 노란색 영역 (충진율 80% 인정) - 범위를 8~19로 조정
-            mask_yellow = cv2.inRange(hsv, np.array([8, 20, 20]), np.array([19, 255, 255]))
-
-            # 주황색 영역 (충진율 20% 인정) - 범위를 3~7로 조정
-            mask_orange = cv2.inRange(hsv, np.array([3, 20, 20]), np.array([7, 255, 255]))
+            # [범위 유연화] 채도(S)와 명도(V) 하한선을 10으로 낮추어 카메라 톤 편차 흡수
+            mask_green = cv2.inRange(hsv, np.array([15, 10, 10]), np.array([98, 255, 255]))
+            mask_yellow = cv2.inRange(hsv, np.array([7, 10, 10]), np.array([14, 255, 255]))
+            mask_orange = cv2.inRange(hsv, np.array([2, 10, 10]), np.array([6, 255, 255]))
 
             # 중복 제거 (초록색 영역 최우선)
             mask_yellow = cv2.bitwise_and(mask_yellow, cv2.bitwise_not(mask_green))
