@@ -149,21 +149,17 @@ if uploaded_file is not None:
             warped_img = cv2.warpPerspective(orig_img, matrix, (TARGET_W, TARGET_H))
             warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
             
-            # HSV 색공간 변환
+            # HSV 색공간 변환을 통한 정밀 이진화 및 마스크 추출
             hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
             
-            # =========================================================================
-            # [오차 보정 핵심 파라미터 수정]
-            # 카메라 오토 스케일링으로 인한 음(-)의 편차 감소를 위해 채도/명도 범위 확장 및 초록 임계값 확장
-            # =========================================================================
-            # 1. 초록색 영역 (완전 충진 - 100%): 하한선 22->16으로 확장하여 연두/라임 톤 수용
-            mask_green = cv2.inRange(hsv, np.array([16, 6, 6]), np.array([98, 255, 255]))
+            # 1. 초록색 영역 (완전 충진 - 100%): Hue 하한선만 기존 22 -> 30으로 상향 조정
+            mask_green = cv2.inRange(hsv, np.array([30, 12, 12]), np.array([98, 255, 255]))
 
-            # 2. 노란색 + 주황색 영역 (부분 충진 - 50%): 채도/명도 최소값 15->6으로 완화
-            mask_yellow_orange = cv2.inRange(hsv, np.array([7, 6, 6]), np.array([25, 255, 255]))
+            # 2. 노란색 + 주황색 영역 (부분 충진 - 50%): 원래 조건 그대로 유지
+            mask_yellow_orange = cv2.inRange(hsv, np.array([8, 15, 15]), np.array([25, 255, 255]))
 
-            # 3. 빨강-주황 경계 천이 영역 (미세 가중치 - 20%)
-            mask_boundary = cv2.inRange(hsv, np.array([2, 6, 6]), np.array([6, 255, 255]))
+            # 3. 빨강-주황 경계 천이 영역 (미세 가중치 - 20%): 원래 조건 그대로 유지
+            mask_boundary = cv2.inRange(hsv, np.array([3, 15, 15]), np.array([7, 255, 255]))
 
             # 우선순위에 따른 마스크 중복 제거
             mask_yellow_orange = cv2.bitwise_and(mask_yellow_orange, cv2.bitwise_not(mask_green))
@@ -175,12 +171,12 @@ if uploaded_file is not None:
             mask_yellow_orange = cv2.morphologyEx(mask_yellow_orange, cv2.MORPH_OPEN, kernel)
             mask_boundary = cv2.morphologyEx(mask_boundary, cv2.MORPH_OPEN, kernel)
 
-            # 자잘한 노이즈 필터링 (최소 크기 6픽셀 이상으로 소실 경계 보존)
+            # 자잘한 노이즈 필터링 (최소 크기 10픽셀 이상: 원래 조건 그대로 유지)
             for m in [mask_yellow_orange, mask_boundary]:
                 num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(m)
                 filtered_m = np.zeros_like(m)
                 for i in range(1, num_labels):
-                    if stats[i, cv2.CC_STAT_AREA] >= 6:
+                    if stats[i, cv2.CC_STAT_AREA] >= 10:
                         filtered_m[labels == i] = 255
                 m[:] = filtered_m[:]
 
