@@ -68,24 +68,12 @@ if "last_coord" not in st.session_state:
 st.markdown("""
     <div class="title-card">
         <h1>🔥 열화상 타일 정밀 충진율 분석 시스템</h1>
-        <p>아바쿠스 시뮬레이션 기반 모델 적용 · 4점 ROI 자동 보정 및 실시간 감도 보정 솔루션</p>
+        <p>아바쿠스 시뮬레이션 기반 모델 적용 · 4점 ROI 자동 보정 및 정밀 이진화 분석 솔루션</p>
     </div>
 """, unsafe_allow_html=True)
 
 st.sidebar.header("📁 이미지 업로드")
 uploaded_file = st.sidebar.file_uploader("열화상 사진 선택", type=["jpg", "jpeg", "png", "bmp"])
-
-st.sidebar.markdown("---")
-st.sidebar.header("🎛️ 촬영 환경 보정")
-# 교수님의 수동 미세 조정 개념을 차용한 실시간 감도 슬라이더
-sensitivity = st.sidebar.slider(
-    "색상 감도 오프셋 (Threshold Offset)", 
-    min_value=-8, 
-    max_value=8, 
-    value=0, 
-    step=1,
-    help="카메라 오토 스케일링으로 색상이 밀릴 때 슬라이더를 조절하여 마스크 범위를 미세 보정합니다."
-)
 
 if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -164,19 +152,14 @@ if uploaded_file is not None:
             # HSV 색공간 변환을 통한 정밀 이진화 및 마스크 추출
             hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
             
-            # 슬라이더 오프셋을 반영한 동적 HSV 범위 설정 (기본 원본 구조 유지)
-            green_lower = max(22 + sensitivity, 10)
-            yellow_lower = max(8 + sensitivity, 3)
-            boundary_lower = max(3 + sensitivity, 1)
+            # 1. 초록색 영역 (완전 충진 - 100%) - 범위 미세 확장으로 고충진 타일 손실 방지
+            mask_green = cv2.inRange(hsv, np.array([22, 12, 12]), np.array([98, 255, 255]))
 
-            # 1. 초록색 영역 (완전 충진 - 100%)
-            mask_green = cv2.inRange(hsv, np.array([green_lower, 12, 12]), np.array([98, 255, 255]))
-
-            # 2. 노란색 + 주황색 영역 (부분 충진 - 50%)
-            mask_yellow_orange = cv2.inRange(hsv, np.array([yellow_lower, 15, 15]), np.array([25, 255, 255]))
+            # 2. 노란색 + 주황색 영역 (부분 충진 - 가중치를 50%로 최적화 조정)
+            mask_yellow_orange = cv2.inRange(hsv, np.array([8, 15, 15]), np.array([25, 255, 255]))
 
             # 3. 빨강-주황 경계 천이 영역 (미세 가중치 - 20%)
-            mask_boundary = cv2.inRange(hsv, np.array([boundary_lower, 15, 15]), np.array([7, 255, 255]))
+            mask_boundary = cv2.inRange(hsv, np.array([3, 15, 15]), np.array([7, 255, 255]))
 
             # 우선순위에 따른 마스크 중복 제거
             mask_yellow_orange = cv2.bitwise_and(mask_yellow_orange, cv2.bitwise_not(mask_green))
@@ -199,9 +182,9 @@ if uploaded_file is not None:
 
             # 진단 결과 그레이스케일 마스크 시각화 생성 (노랑·주황은 128 중간 회색으로 표현)
             display_mask_gray = np.zeros((TARGET_H, TARGET_W), dtype=np.uint8)
-            display_mask_gray[mask_boundary == 255]       = 50    # 경계 천이 영역 (20%)
-            display_mask_gray[mask_yellow_orange == 255] = 128   # 노랑·주황 부분 충진 (50%)
-            display_mask_gray[mask_green == 255]         = 255   # 초록색 완전 충진 (100%)
+            display_mask_gray[mask_boundary == 255]     = 50   # 경계 천이 영역 (20%)
+            display_mask_gray[mask_yellow_orange == 255] = 128  # 노랑·주황 부분 충진 (50%)
+            display_mask_gray[mask_green == 255]        = 255  # 초록색 완전 충진 (100%)
 
             # 픽셀 수 및 비율 계산
             green_pixels = np.sum(mask_green == 255)
