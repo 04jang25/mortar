@@ -149,17 +149,21 @@ if uploaded_file is not None:
             warped_img = cv2.warpPerspective(orig_img, matrix, (TARGET_W, TARGET_H))
             warped_rgb = cv2.cvtColor(warped_img, cv2.COLOR_BGR2RGB)
             
-            # HSV 색공간 변환을 통한 정밀 이진화 및 마스크 추출
+            # HSV 색공간 변환
             hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
             
-            # 1. 초록색 영역 (완전 충진 - 100%) - 범위 미세 확장으로 고충진 타일 손실 방지
-            mask_green = cv2.inRange(hsv, np.array([22, 12, 12]), np.array([98, 255, 255]))
+            # =========================================================================
+            # [오차 보정 핵심 파라미터 수정]
+            # 카메라 오토 스케일링으로 인한 음(-)의 편차 감소를 위해 채도/명도 범위 확장 및 초록 임계값 확장
+            # =========================================================================
+            # 1. 초록색 영역 (완전 충진 - 100%): 하한선 22->16으로 확장하여 연두/라임 톤 수용
+            mask_green = cv2.inRange(hsv, np.array([16, 6, 6]), np.array([98, 255, 255]))
 
-            # 2. 노란색 + 주황색 영역 (부분 충진 - 가중치를 50%로 최적화 조정)
-            mask_yellow_orange = cv2.inRange(hsv, np.array([8, 15, 15]), np.array([25, 255, 255]))
+            # 2. 노란색 + 주황색 영역 (부분 충진 - 50%): 채도/명도 최소값 15->6으로 완화
+            mask_yellow_orange = cv2.inRange(hsv, np.array([7, 6, 6]), np.array([25, 255, 255]))
 
             # 3. 빨강-주황 경계 천이 영역 (미세 가중치 - 20%)
-            mask_boundary = cv2.inRange(hsv, np.array([3, 15, 15]), np.array([7, 255, 255]))
+            mask_boundary = cv2.inRange(hsv, np.array([2, 6, 6]), np.array([6, 255, 255]))
 
             # 우선순위에 따른 마스크 중복 제거
             mask_yellow_orange = cv2.bitwise_and(mask_yellow_orange, cv2.bitwise_not(mask_green))
@@ -171,20 +175,20 @@ if uploaded_file is not None:
             mask_yellow_orange = cv2.morphologyEx(mask_yellow_orange, cv2.MORPH_OPEN, kernel)
             mask_boundary = cv2.morphologyEx(mask_boundary, cv2.MORPH_OPEN, kernel)
 
-            # 자잘한 노이즈 필터링 (최소 크기 10픽셀 이상)
+            # 자잘한 노이즈 필터링 (최소 크기 6픽셀 이상으로 소실 경계 보존)
             for m in [mask_yellow_orange, mask_boundary]:
                 num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(m)
                 filtered_m = np.zeros_like(m)
                 for i in range(1, num_labels):
-                    if stats[i, cv2.CC_STAT_AREA] >= 10:
+                    if stats[i, cv2.CC_STAT_AREA] >= 6:
                         filtered_m[labels == i] = 255
                 m[:] = filtered_m[:]
 
-            # 진단 결과 그레이스케일 마스크 시각화 생성 (노랑·주황은 128 중간 회색으로 표현)
+            # 진단 결과 그레이스케일 마스크 시각화 생성
             display_mask_gray = np.zeros((TARGET_H, TARGET_W), dtype=np.uint8)
-            display_mask_gray[mask_boundary == 255]     = 50   # 경계 천이 영역 (20%)
-            display_mask_gray[mask_yellow_orange == 255] = 128  # 노랑·주황 부분 충진 (50%)
-            display_mask_gray[mask_green == 255]        = 255  # 초록색 완전 충진 (100%)
+            display_mask_gray[mask_boundary == 255]       = 50    # 경계 천이 영역 (20%)
+            display_mask_gray[mask_yellow_orange == 255] = 128   # 노랑·주황 부분 충진 (50%)
+            display_mask_gray[mask_green == 255]         = 255   # 초록색 완전 충진 (100%)
 
             # 픽셀 수 및 비율 계산
             green_pixels = np.sum(mask_green == 255)
